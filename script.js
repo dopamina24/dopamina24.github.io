@@ -11,6 +11,21 @@ const MAX_IMAGES = 5;
 let play = true;
 let noCount = 0;
 
+document.addEventListener('DOMContentLoaded', (event) => {
+    const noButton = document.querySelector(".btn--no");
+
+    noButton.addEventListener("click", function () {
+        const maxX = window.innerWidth - this.offsetWidth;
+        const maxY = window.innerHeight - this.offsetHeight;
+        const randomX = Math.random() * maxX;
+        const randomY = Math.random() * maxY;
+
+        this.style.position = 'fixed';
+        this.style.left = `${randomX}px`;
+        this.style.top = `${randomY}px`;
+    });
+});
+
 yesButton.addEventListener("click", handleYesClick);
 
 noButton.addEventListener("click", function () {
