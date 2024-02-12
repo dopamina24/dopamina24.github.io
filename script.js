@@ -70,17 +70,18 @@ function updateNoButtonText() {
 }
 
 function moveNoButton() {
-  // Calcula los límites máximos para la nueva posición del botón "No"
-  const maxX = buttonsContainer.clientWidth - noButton.offsetWidth;
-  const maxY = buttonsContainer.clientHeight - noButton.offsetHeight;
+  // Calcula los límites máximos para la nueva posición del botón "No" basándose en la ventana del navegador
+  const maxX = window.innerWidth - noButton.offsetWidth;
+  const maxY = window.innerHeight - noButton.offsetHeight;
 
   // Genera posiciones aleatorias dentro de esos límites
   const randomX = Math.random() * maxX;
   const randomY = Math.random() * maxY;
 
   // Aplica las posiciones aleatorias al botón "No"
-  noButton.style.position = 'absolute';
+  noButton.style.position = 'fixed'; // Usar 'fixed' para moverse libremente por toda la pantalla
   noButton.style.left = `${randomX}px`;
   noButton.style.top = `${randomY}px`;
 }
+
 
