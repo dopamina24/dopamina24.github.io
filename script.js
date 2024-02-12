@@ -43,11 +43,11 @@ function resizeYesButton() {
 function generateMessage(noCount) {
   const messages = [
     "No",
-    "Are you sure?",
-    "Pookie please",
-    "Don't do this to me :(",
-    "You're breaking my heart",
-    "I'm gonna cry...",
+    "Estás segura?",
+    "Por favoooor",
+    "No me hagas esto :(",
+    "Me rompes el kokoro",
+    "Woa llorar ih ih, ih ih",
   ];
 
   const messageIndex = Math.min(noCount, messages.length - 1);
@@ -55,7 +55,13 @@ function generateMessage(noCount) {
 }
 
 function changeImage(image) {
-  catImg.src = `img/cat-${image}.jpg`;
+  // Comprueba si el argumento `image` es "yes" para mostrar el GIF
+  if (image === "yes") {
+    catImg.src = `img/cat-happy.gif`; // Asegúrate de que la ruta y el nombre del archivo coincidan con tu GIF
+  } else {
+    // Si no es "yes", asume que es un intento de cambiar a otra imagen de gato basada en noCount
+    catImg.src = `img/cat-${image}.jpg`; // Esto mantiene la lógica original para las imágenes estáticas
+  }
 }
 
 function updateNoButtonText() {
