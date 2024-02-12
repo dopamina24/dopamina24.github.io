@@ -16,6 +16,7 @@ body {
 .container {
   height: 100vh;
   margin: 0 auto;
+  position: relative; /* Asegura que los hijos posicionados de manera absoluta se basen en este contenedor */
 
   display: flex;
   flex-direction: column;
@@ -68,3 +69,5 @@ body {
 .hidden {
   display: none;
 }
+
+
