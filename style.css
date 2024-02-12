@@ -9,7 +9,7 @@ html {
 }
 
 body {
-  background-color: #fff0f6;
+  background-color: #b897cf;
   font-family: "Protest Riot", sans-serif;
 }
 
@@ -58,11 +58,11 @@ body {
 }
 
 .btn--yes {
-  background-color: #40c057;
+  background-color: #c0407c;
 }
 
 .btn--no {
-  background-color: #f03e3e;
+  background-color: #40c046;
 }
 
 .hidden {
