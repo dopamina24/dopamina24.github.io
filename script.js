@@ -20,6 +20,7 @@ noButton.addEventListener("click", function () {
     changeImage(imageIndex);
     resizeYesButton();
     updateNoButtonText();
+    moveNoButton(); // Llama a la nueva función para mover el botón "No".
     if (noCount === MAX_IMAGES) {
       play = false;
     }
@@ -66,4 +67,13 @@ function changeImage(image) {
 
 function updateNoButtonText() {
   noButton.innerHTML = generateMessage(noCount);
+}
+
+function moveNoButton() {
+  // Asegúrate de que el contenedor tenga `position: relative;` para que este posicionamiento funcione correctamente.
+  const randomTop = Math.random() * (buttonsContainer.offsetHeight - noButton.offsetHeight);
+  const randomLeft = Math.random() * (buttonsContainer.offsetWidth - noButton.offsetWidth);
+  noButton.style.position = 'absolute';
+  noButton.style.top = `${randomTop}px`;
+  noButton.style.left = `${randomLeft}px`;
 }
