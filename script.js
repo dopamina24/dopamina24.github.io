@@ -70,10 +70,17 @@ function updateNoButtonText() {
 }
 
 function moveNoButton() {
-  // Asegúrate de que el contenedor tenga `position: relative;` para que este posicionamiento funcione correctamente.
-  const randomTop = Math.random() * (buttonsContainer.offsetHeight - noButton.offsetHeight);
-  const randomLeft = Math.random() * (buttonsContainer.offsetWidth - noButton.offsetWidth);
+  // Calcula los límites máximos para la nueva posición del botón "No"
+  const maxX = buttonsContainer.clientWidth - noButton.offsetWidth;
+  const maxY = buttonsContainer.clientHeight - noButton.offsetHeight;
+
+  // Genera posiciones aleatorias dentro de esos límites
+  const randomX = Math.random() * maxX;
+  const randomY = Math.random() * maxY;
+
+  // Aplica las posiciones aleatorias al botón "No"
   noButton.style.position = 'absolute';
-  noButton.style.top = `${randomTop}px`;
-  noButton.style.left = `${randomLeft}px`;
+  noButton.style.left = `${randomX}px`;
+  noButton.style.top = `${randomY}px`;
 }
+
