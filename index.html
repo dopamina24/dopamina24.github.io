@@ -1,27 +1,33 @@
 <!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Protest+Riot&display=swap"
-      rel="stylesheet"
-    />
-    <link rel="stylesheet" href="style.css" />
-    <title>Quieres ser mi Valentine?</title>
-  </head>
-  <body>
-    <main class="container">
-      <img class="cat-img" src="img/cat-0.jpg" alt="Picture of a cat" />
-      <p class="title">Quieres ser mi Valentine?</p>
-      <div class="buttons">
-        <button type="button" class="btn btn--yes">Sí</button>
-        <button type="button" class="btn btn--no">No</button>
-      </div>
-    </main>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Confluence Search</title>
+</head>
+<body>
+    <script>
+        function searchConfluence() {
+            const query = document.getElementById('query').value;
+            fetch('https://your-flask-server.com/search_manual', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ query })
+            })
+            .then(response => response.json())
+            .then(data => {
+                document.getElementById('result').textContent = data.result;
+            });
+        }
+    </script>
 
-    <script type="module" src="script.js"></script>
-  </body>
+    <div>
+        <label for="query">Consulta:</label>
+        <input type="text" id="query" name="query">
+        <button onclick="searchConfluence()">Buscar</button>
+        <div id="result"></div>
+    </div>
+</body>
 </html>
