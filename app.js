@@ -8,6 +8,7 @@ const OCM_API_BASE = "https://api.openchargemap.io/v3/poi/";
 const NOMINATIM_BASE = "https://nominatim.openstreetmap.org/search";
 const CHILE_CENTER = [-33.45, -70.65]; // Santiago
 const CHILE_BOUNDS = [[-56.0, -75.7], [-17.5, -66.4]];
+const DEFAULT_API_KEY = "49e0ba8b-4811-44eb-a702-60e298b211df";
 const STORAGE_KEY = "electrochile_api_key";
 
 // Connector type names for display
@@ -32,7 +33,7 @@ const state = {
     userMarker: null,
     stations: [],
     userLocation: null,
-    apiKey: localStorage.getItem(STORAGE_KEY) || ""
+    apiKey: localStorage.getItem(STORAGE_KEY) || DEFAULT_API_KEY
 };
 
 // ---- DOM Elements ----
