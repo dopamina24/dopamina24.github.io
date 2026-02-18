@@ -9,7 +9,9 @@ var ECOCARGA_API = "https://backend.electromovilidadenlinea.cl/locations";
 var NOMINATIM_BASE = "https://nominatim.openstreetmap.org/search";
 var OSRM_BASE = "https://router.project-osrm.org/route/v1/driving";
 var CHILE_CENTER = [-33.45, -70.65];
-var PAGE_SIZE = 100;
+var PAGE_SIZE = 500;
+var CACHE_KEY = "electrochile_stations";
+var CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
 // Terrain consumption multipliers (kWh/100km base ~15)
 var TERRAIN = {
@@ -198,33 +200,100 @@ function buildCommuneIndex() {
         .sort(function (a, b) { return b.count - a.count; });
 }
 
+var _searchDebounce = null;
+
 function onSearchInput() {
     var v = dom.searchInput.value.trim();
-    if (v.length >= 2 && state.communes.length) showAC(v); else closeAC();
+    if (v.length < 2) { closeAC(); return; }
+    showAC(v);
+    // Also fetch Nominatim suggestions with debounce
+    clearTimeout(_searchDebounce);
+    _searchDebounce = setTimeout(function () { fetchNominatimAC(v, dom.acList, null); }, 350);
 }
 
 function showAC(q) {
     var ql = q.toLowerCase();
     var matches = state.communes.filter(function (c) {
         return c.name.toLowerCase().indexOf(ql) !== -1 || c.region.toLowerCase().indexOf(ql) !== -1;
-    }).slice(0, 8);
-    if (!matches.length) { closeAC(); return; }
+    }).slice(0, 4);
 
     var html = "";
-    matches.forEach(function (m, i) {
-        html += '<div class="ac-item" data-i="' + i + '" data-name="' + escapeAttr(m.name) + '">' +
-            '<span class="ac-name">' + hlMatch(m.name, ql) + '</span>' +
-            '<span class="ac-meta">' + escapeHtml(m.region) + ' &middot; ' + m.count + ' est.</span></div>';
-    });
-    dom.acList.innerHTML = html;
-    dom.acList.classList.remove("hidden");
+    if (matches.length) {
+        html += '<div class="ac-section">Comunas</div>';
+        matches.forEach(function (m, i) {
+            html += '<div class="ac-item" data-i="' + i + '" data-name="' + escapeAttr(m.name) + '">' +
+                '<span class="ac-name">' + hlMatch(m.name, ql) + '</span>' +
+                '<span class="ac-meta">' + escapeHtml(m.region) + ' &middot; ' + m.count + ' est.</span></div>';
+        });
+    }
 
-    dom.acList.querySelectorAll(".ac-item").forEach(function (it) {
-        it.addEventListener("mousedown", function (e) {
+    // Keep existing Nominatim results if any
+    var existingNom = dom.acList.querySelector(".ac-section-nominatim");
+    var nomHtml = existingNom ? existingNom.outerHTML + getNominatimItemsHtml(dom.acList) : "";
+
+    dom.acList.innerHTML = html + nomHtml;
+    if (html || nomHtml) dom.acList.classList.remove("hidden");
+    else closeAC();
+
+    bindACItems(dom.acList);
+}
+
+function getNominatimItemsHtml(list) {
+    var items = list.querySelectorAll(".ac-item-nominatim");
+    var h = "";
+    items.forEach(function (it) { h += it.outerHTML; });
+    return h;
+}
+
+function fetchNominatimAC(q, listEl, callback) {
+    fetch(NOMINATIM_BASE + "?q=" + encodeURIComponent(q + ", Chile") + "&format=json&limit=4&countrycodes=cl&addressdetails=1",
+        { headers: { "Accept-Language": "es" } })
+        .then(function (r) { return r.json(); })
+        .then(function (results) {
+            if (!results.length) { if (callback) callback(); return; }
+
+            // Remove old Nominatim results
+            var oldSection = listEl.querySelector(".ac-section-nominatim");
+            if (oldSection) oldSection.remove();
+            listEl.querySelectorAll(".ac-item-nominatim").forEach(function (it) { it.remove(); });
+
+            var nomHtml = '<div class="ac-section ac-section-nominatim">Direcciones</div>';
+            results.forEach(function (r) {
+                var name = r.display_name.split(",").slice(0, 2).join(",");
+                nomHtml += '<div class="ac-item ac-item-nominatim" data-name="' + escapeAttr(name) + '" data-lat="' + r.lat + '" data-lng="' + r.lon + '">' +
+                    '<span class="ac-name">' + escapeHtml(name) + '</span>' +
+                    '<span class="ac-meta">' + escapeHtml(r.display_name.split(",").slice(2, 4).join(",").trim()) + '</span></div>';
+            });
+            listEl.insertAdjacentHTML("beforeend", nomHtml);
+            listEl.classList.remove("hidden");
+            bindACItems(listEl);
+            if (callback) callback();
+        })
+        .catch(function () { if (callback) callback(); });
+}
+
+function bindACItems(listEl) {
+    listEl.querySelectorAll(".ac-item").forEach(function (it) {
+        // Remove old listeners by cloning
+        var clone = it.cloneNode(true);
+        it.parentNode.replaceChild(clone, it);
+        clone.addEventListener("mousedown", function (e) {
             e.preventDefault();
-            dom.searchInput.value = this.dataset.name;
+            var name = this.dataset.name;
+            var lat = this.dataset.lat;
+            var lng = this.dataset.lng;
+            dom.searchInput.value = name;
             closeAC();
-            geocodeSearch(this.dataset.name);
+            if (lat && lng) {
+                // Direct coordinates from Nominatim
+                var la = parseFloat(lat), ln = parseFloat(lng);
+                state.userLocation = { lat: la, lng: ln };
+                state.map.setView([la, ln], 14);
+                addUserMarker(la, ln);
+                filterByLocation(la, ln);
+            } else {
+                geocodeSearch(name);
+            }
         });
     });
 }
@@ -258,11 +327,29 @@ function navAC(dir) {
 // ============================================
 
 function loadAllStations() {
-    showLoading(true, "Conectando con EcoCarga...");
+    // Try cache first
+    var cached = getCachedStations();
+    if (cached) {
+        showLoading(true, "Cargando desde cache...");
+        state.allStations = cached.map(normalizeStation);
+        state.stations = state.allStations.slice();
+        buildCommuneIndex();
+        dom.dataInfo.textContent = state.allStations.length + " estaciones | EcoCarga (cache)";
+        tryGeolocation();
+        // Refresh in background for next visit
+        fetchAllFromAPI(true);
+        return;
+    }
+
+    fetchAllFromAPI(false);
+}
+
+function fetchAllFromAPI(silent) {
+    if (!silent) showLoading(true, "Conectando con EcoCarga...");
 
     fetchPage(1).then(function (first) {
         var allItems = first.items || [];
-        showLoading(true, "Cargando " + first.total_items + " estaciones...");
+        if (!silent) showLoading(true, "Cargando " + first.total_items + " estaciones...");
         if (first.total_pages <= 1) return allItems;
         var p = [];
         for (var i = 2; i <= first.total_pages; i++) p.push(fetchPage(i));
@@ -271,16 +358,41 @@ function loadAllStations() {
             return allItems;
         });
     }).then(function (items) {
-        state.allStations = items.map(normalizeStation);
-        state.stations = state.allStations.slice();
-        buildCommuneIndex();
-        dom.dataInfo.textContent = state.allStations.length + " estaciones | EcoCarga";
-        tryGeolocation();
+        // Save to cache
+        try {
+            localStorage.setItem(CACHE_KEY, JSON.stringify({ ts: Date.now(), data: items }));
+        } catch (e) { /* quota exceeded, ignore */ }
+
+        if (!silent) {
+            state.allStations = items.map(normalizeStation);
+            state.stations = state.allStations.slice();
+            buildCommuneIndex();
+            dom.dataInfo.textContent = state.allStations.length + " estaciones | EcoCarga";
+            tryGeolocation();
+        } else {
+            // Update data silently for next filter/search
+            state.allStations = items.map(normalizeStation);
+            state.stations = state.allStations.slice();
+            buildCommuneIndex();
+            dom.dataInfo.textContent = state.allStations.length + " estaciones | EcoCarga";
+        }
     }).catch(function (err) {
         console.error("Error:", err);
-        showLoading(false);
-        dom.resultsList.innerHTML = '<div class="empty-state"><p>Error al conectar con EcoCarga.</p></div>';
+        if (!silent) {
+            showLoading(false);
+            dom.resultsList.innerHTML = '<div class="empty-state"><p>Error al conectar con EcoCarga.</p></div>';
+        }
     });
+}
+
+function getCachedStations() {
+    try {
+        var raw = localStorage.getItem(CACHE_KEY);
+        if (!raw) return null;
+        var obj = JSON.parse(raw);
+        if (Date.now() - obj.ts > CACHE_TTL) return null;
+        return obj.data;
+    } catch (e) { return null; }
 }
 
 function fetchPage(page) {
@@ -294,10 +406,13 @@ function normalizeStation(item) {
     var evseCount = 0;
     var availableCount = 0;
 
+    var inUseCount = 0;
+
     (item.evses || []).forEach(function (evse) {
         evseCount++;
         var evseStatus = (evse.status || "").toUpperCase();
         if (evseStatus === "AVAILABLE" || evseStatus === "DISPONIBLE") availableCount++;
+        if (evseStatus === "CHARGING" || evseStatus === "EN USO") inUseCount++;
         (evse.connectors || []).forEach(function (c) {
             var rawStatus = (c.status || evse.status || "UNKNOWN").toUpperCase();
             connectors.push({
@@ -328,7 +443,9 @@ function normalizeStation(item) {
         maxPower: maxPower,
         evseCount: evseCount,
         availableCount: availableCount,
+        inUseCount: inUseCount,
         hasAvailable: availableCount > 0,
+        hasInUse: inUseCount > 0,
         is24h: item.opening_times && item.opening_times.twentyfourseven,
         owner: item.owner ? item.owner.name : "Desconocido",
         lastUpdated: item.last_updated,
@@ -423,6 +540,8 @@ function applyFilters() {
         if (cVals && !s.standards.some(function (st) { return cVals.indexOf(st) !== -1; })) return false;
         if (pVals && !s.powerTypes.some(function (p) { return pVals.indexOf(p) !== -1; })) return false;
         if (sVal === "available" && !s.hasAvailable) return false;
+        if (sVal === "inuse" && !s.hasInUse) return false;
+        if (sVal === "unavailable" && (s.hasAvailable || s.hasInUse)) return false;
         return true;
     });
 
@@ -468,7 +587,8 @@ function renderMarkers(stations) {
         var isDC = s.powerTypes.indexOf("DC") !== -1;
         var cls = "marker-icon";
         if (isDC) cls += " marker-icon-fast";
-        if (!s.hasAvailable) cls += " marker-icon-unavailable";
+        if (!s.hasAvailable && s.hasInUse) cls += " marker-icon-inuse";
+        else if (!s.hasAvailable) cls += " marker-icon-unavailable";
         var icon = L.divIcon({ html: '<div class="' + cls + '">&#9889;</div>', className: "", iconSize: [32, 32], iconAnchor: [16, 16] });
         var m = L.marker([s.lat, s.lng], { icon: icon });
         m.bindPopup(buildPopup(s), { maxWidth: 340 });
@@ -485,8 +605,17 @@ function buildPopup(s) {
     if (s._distance != null) h += '<div class="popup-meta">' + s._distance.toFixed(1) + ' km</div>';
 
     // Status bar
-    var barCls = s.hasAvailable ? "bar-available" : "bar-unavailable";
-    var barTxt = s.hasAvailable ? s.availableCount + "/" + s.evseCount + " cargadores disponibles" : "Ninguno disponible";
+    var barCls, barTxt;
+    if (s.hasAvailable) {
+        barCls = "bar-available";
+        barTxt = s.availableCount + "/" + s.evseCount + " cargadores disponibles";
+    } else if (s.hasInUse) {
+        barCls = "bar-inuse";
+        barTxt = s.inUseCount + "/" + s.evseCount + " en uso";
+    } else {
+        barCls = "bar-unavailable";
+        barTxt = "Ninguno disponible";
+    }
     h += '<div class="popup-status-bar ' + barCls + '">' + barTxt + '</div>';
 
     // Badges
@@ -537,11 +666,20 @@ function renderResultsList(stations) {
 
     var html = "";
     stations.slice(0, 60).forEach(function (s) {
-        var cardCls = s.hasAvailable ? "card-available" : "card-unavailable";
+        var cardCls = s.hasAvailable ? "card-available" : (s.hasInUse ? "card-inuse" : "card-unavailable");
 
         // Status tag
-        var stCls = s.hasAvailable ? "tag-status-available" : "tag-status-unavailable";
-        var stTxt = s.hasAvailable ? s.availableCount + "/" + s.evseCount + " Disp." : "No disponible";
+        var stCls, stTxt;
+        if (s.hasAvailable) {
+            stCls = "tag-status-available";
+            stTxt = s.availableCount + "/" + s.evseCount + " Disp.";
+        } else if (s.hasInUse) {
+            stCls = "tag-status-inuse";
+            stTxt = s.inUseCount + "/" + s.evseCount + " En uso";
+        } else {
+            stCls = "tag-status-unavailable";
+            stTxt = "No disponible";
+        }
 
         // Mini connector icons row
         var miniHtml = '<div class="card-conn-row">';
@@ -681,30 +819,57 @@ function updateRangeEstimate() {
 
 // ---- Planner Autocomplete ----
 
+var _plannerDebounce = null;
+
 function plannerAC(inputEl, listEl, which) {
     var v = inputEl.value.trim();
-    if (v.length < 2 || !state.communes.length) { closePlannerAC(listEl); return; }
+    if (v.length < 2) { closePlannerAC(listEl); return; }
     var ql = v.toLowerCase();
     var matches = state.communes.filter(function (c) {
         return c.name.toLowerCase().indexOf(ql) !== -1 || c.region.toLowerCase().indexOf(ql) !== -1;
-    }).slice(0, 6);
-    if (!matches.length) { closePlannerAC(listEl); return; }
+    }).slice(0, 3);
 
     var html = "";
-    matches.forEach(function (m) {
-        html += '<div class="ac-item" data-name="' + escapeAttr(m.name) + '">' +
-            '<span class="ac-name">' + hlMatch(m.name, ql) + '</span>' +
-            '<span class="ac-meta">' + escapeHtml(m.region) + '</span></div>';
-    });
+    if (matches.length) {
+        html += '<div class="ac-section">Comunas</div>';
+        matches.forEach(function (m) {
+            html += '<div class="ac-item" data-name="' + escapeAttr(m.name) + '">' +
+                '<span class="ac-name">' + hlMatch(m.name, ql) + '</span>' +
+                '<span class="ac-meta">' + escapeHtml(m.region) + '</span></div>';
+        });
+    }
     listEl.innerHTML = html;
-    listEl.classList.remove("hidden");
+    if (html) listEl.classList.remove("hidden");
 
+    bindPlannerACItems(listEl, inputEl, which);
+
+    // Also fetch Nominatim suggestions with debounce
+    clearTimeout(_plannerDebounce);
+    _plannerDebounce = setTimeout(function () {
+        fetchNominatimAC(v, listEl, function () {
+            bindPlannerACItems(listEl, inputEl, which);
+        });
+    }, 350);
+}
+
+function bindPlannerACItems(listEl, inputEl, which) {
     listEl.querySelectorAll(".ac-item").forEach(function (it) {
-        it.addEventListener("mousedown", function (e) {
+        var clone = it.cloneNode(true);
+        it.parentNode.replaceChild(clone, it);
+        clone.addEventListener("mousedown", function (e) {
             e.preventDefault();
-            inputEl.value = this.dataset.name;
+            var name = this.dataset.name;
+            var lat = this.dataset.lat;
+            var lng = this.dataset.lng;
+            inputEl.value = name;
             closePlannerAC(listEl);
-            geocodePlannerField(which);
+            if (lat && lng) {
+                var loc = { lat: parseFloat(lat), lng: parseFloat(lng), name: name };
+                if (which === "origin") state.plannerOrigin = loc;
+                else state.plannerDest = loc;
+            } else {
+                geocodePlannerField(which);
+            }
         });
     });
 }
