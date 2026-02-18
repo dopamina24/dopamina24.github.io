@@ -7,8 +7,19 @@
 
 var ECOCARGA_API = "https://backend.electromovilidadenlinea.cl/locations";
 var NOMINATIM_BASE = "https://nominatim.openstreetmap.org/search";
+var OSRM_BASE = "https://router.project-osrm.org/route/v1/driving";
 var CHILE_CENTER = [-33.45, -70.65];
 var PAGE_SIZE = 100;
+
+// Terrain consumption multipliers (kWh/100km base ~15)
+var TERRAIN = {
+    flat:     { factor: 1.0,  label: "Plano",   consumption: 15 },
+    moderate: { factor: 1.15, label: "Colinas",  consumption: 17 },
+    mountain: { factor: 1.4,  label: "Montaña",  consumption: 21 }
+};
+
+// How close to route a station must be (km)
+var ROUTE_CORRIDOR_KM = 5;
 
 // SVG icons for connector types
 var CONNECTOR_ICONS = {
@@ -28,7 +39,14 @@ var state = {
     allStations: [],
     stations: [],
     userLocation: null,
-    communes: []
+    communes: [],
+    // Route planner
+    routeLayer: null,
+    routeStopMarkers: [],
+    originMarker: null,
+    destMarker: null,
+    plannerOrigin: null, // { lat, lng, name }
+    plannerDest: null
 };
 
 // ---- DOM ----
@@ -52,6 +70,25 @@ function cacheDom() {
     dom.sidebarToggle = document.getElementById("sidebar-toggle");
     dom.sidebarClose = document.getElementById("sidebar-close");
     dom.dataInfo = document.getElementById("data-info");
+    // Tabs
+    dom.tabBtns = document.querySelectorAll(".tab-btn");
+    dom.tabFinder = document.getElementById("tab-finder");
+    dom.tabPlanner = document.getElementById("tab-planner");
+    // Planner
+    dom.plannerOrigin = document.getElementById("planner-origin");
+    dom.plannerDest = document.getElementById("planner-dest");
+    dom.plannerOriginAC = document.getElementById("planner-origin-ac");
+    dom.plannerDestAC = document.getElementById("planner-dest-ac");
+    dom.plannerBattery = document.getElementById("planner-battery");
+    dom.plannerTerrain = document.getElementById("planner-terrain");
+    dom.plannerRangeKm = document.getElementById("planner-range-km");
+    dom.plannerRangeDetail = document.getElementById("planner-range-detail");
+    dom.plannerGo = document.getElementById("planner-go");
+    dom.plannerResults = document.getElementById("planner-results");
+    dom.plannerSummary = document.getElementById("planner-summary");
+    dom.plannerStopsCount = document.getElementById("planner-stops-count");
+    dom.plannerStopsList = document.getElementById("planner-stops-list");
+    dom.plannerUseLocation = document.getElementById("planner-use-location");
 }
 
 // ============================================
@@ -62,7 +99,9 @@ function init() {
     cacheDom();
     initMap();
     initEvents();
+    initPlannerEvents();
     loadAllStations();
+    updateRangeEstimate();
 }
 
 function initMap() {
@@ -115,6 +154,17 @@ function initEvents() {
 
     dom.sidebarToggle.addEventListener("click", function () { dom.sidebar.classList.add("open"); });
     dom.sidebarClose.addEventListener("click", function () { dom.sidebar.classList.remove("open"); });
+
+    // Tabs
+    dom.tabBtns.forEach(function (btn) {
+        btn.addEventListener("click", function () {
+            dom.tabBtns.forEach(function (b) { b.classList.remove("active"); });
+            btn.classList.add("active");
+            var tab = btn.dataset.tab;
+            dom.tabFinder.classList.toggle("active", tab === "finder");
+            dom.tabPlanner.classList.toggle("active", tab === "planner");
+        });
+    });
 }
 
 function handleFilterToggle(e, container) {
@@ -557,6 +607,442 @@ function escapeAttr(s) {
 function showLoading(show, text) {
     dom.loading.classList.toggle("hidden", !show);
     if (text && dom.loadingText) dom.loadingText.textContent = text;
+}
+
+// ============================================
+// Route Planner
+// ============================================
+
+function initPlannerEvents() {
+    // Update range estimate on input change
+    dom.plannerBattery.addEventListener("input", updateRangeEstimate);
+    dom.plannerTerrain.addEventListener("change", updateRangeEstimate);
+
+    // Autocomplete for origin
+    dom.plannerOrigin.addEventListener("input", function () {
+        plannerAC(dom.plannerOrigin, dom.plannerOriginAC, "origin");
+    });
+    dom.plannerOrigin.addEventListener("keydown", function (e) {
+        if (e.key === "Enter") { closePlannerAC(dom.plannerOriginAC); geocodePlannerField("origin"); }
+        if (e.key === "Escape") closePlannerAC(dom.plannerOriginAC);
+    });
+
+    // Autocomplete for destination
+    dom.plannerDest.addEventListener("input", function () {
+        plannerAC(dom.plannerDest, dom.plannerDestAC, "dest");
+    });
+    dom.plannerDest.addEventListener("keydown", function (e) {
+        if (e.key === "Enter") { closePlannerAC(dom.plannerDestAC); geocodePlannerField("dest"); }
+        if (e.key === "Escape") closePlannerAC(dom.plannerDestAC);
+    });
+
+    // Close autocompletes on outside click
+    document.addEventListener("click", function (e) {
+        if (!dom.plannerOrigin.contains(e.target) && !dom.plannerOriginAC.contains(e.target))
+            closePlannerAC(dom.plannerOriginAC);
+        if (!dom.plannerDest.contains(e.target) && !dom.plannerDestAC.contains(e.target))
+            closePlannerAC(dom.plannerDestAC);
+    });
+
+    // Use my location for origin
+    dom.plannerUseLocation.addEventListener("click", function () {
+        if (state.userLocation) {
+            state.plannerOrigin = { lat: state.userLocation.lat, lng: state.userLocation.lng, name: "Mi ubicacion" };
+            dom.plannerOrigin.value = "Mi ubicacion";
+            return;
+        }
+        if (!navigator.geolocation) { alert("Tu navegador no soporta geolocalizacion."); return; }
+        dom.plannerUseLocation.disabled = true;
+        navigator.geolocation.getCurrentPosition(
+            function (pos) {
+                state.userLocation = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+                state.plannerOrigin = { lat: pos.coords.latitude, lng: pos.coords.longitude, name: "Mi ubicacion" };
+                dom.plannerOrigin.value = "Mi ubicacion";
+                dom.plannerUseLocation.disabled = false;
+            },
+            function () { dom.plannerUseLocation.disabled = false; alert("No se pudo obtener tu ubicacion."); },
+            { enableHighAccuracy: true, timeout: 10000 }
+        );
+    });
+
+    // Plan route button
+    dom.plannerGo.addEventListener("click", planRoute);
+}
+
+function updateRangeEstimate() {
+    var battery = parseFloat(dom.plannerBattery.value) || 60;
+    var terrainKey = dom.plannerTerrain.value;
+    var t = TERRAIN[terrainKey] || TERRAIN.moderate;
+    var consumption = t.consumption;
+    var rangeKm = Math.round((battery / consumption) * 100);
+    dom.plannerRangeKm.textContent = "~" + rangeKm + " km";
+    dom.plannerRangeDetail.textContent = battery + " kWh \u00b7 " + t.label + " \u00b7 ~" + consumption + " kWh/100km";
+}
+
+// ---- Planner Autocomplete ----
+
+function plannerAC(inputEl, listEl, which) {
+    var v = inputEl.value.trim();
+    if (v.length < 2 || !state.communes.length) { closePlannerAC(listEl); return; }
+    var ql = v.toLowerCase();
+    var matches = state.communes.filter(function (c) {
+        return c.name.toLowerCase().indexOf(ql) !== -1 || c.region.toLowerCase().indexOf(ql) !== -1;
+    }).slice(0, 6);
+    if (!matches.length) { closePlannerAC(listEl); return; }
+
+    var html = "";
+    matches.forEach(function (m) {
+        html += '<div class="ac-item" data-name="' + escapeAttr(m.name) + '">' +
+            '<span class="ac-name">' + hlMatch(m.name, ql) + '</span>' +
+            '<span class="ac-meta">' + escapeHtml(m.region) + '</span></div>';
+    });
+    listEl.innerHTML = html;
+    listEl.classList.remove("hidden");
+
+    listEl.querySelectorAll(".ac-item").forEach(function (it) {
+        it.addEventListener("mousedown", function (e) {
+            e.preventDefault();
+            inputEl.value = this.dataset.name;
+            closePlannerAC(listEl);
+            geocodePlannerField(which);
+        });
+    });
+}
+
+function closePlannerAC(listEl) {
+    listEl.classList.add("hidden");
+    listEl.innerHTML = "";
+}
+
+function geocodePlannerField(which) {
+    var inputEl = which === "origin" ? dom.plannerOrigin : dom.plannerDest;
+    var q = inputEl.value.trim();
+    if (!q) return;
+    fetch(NOMINATIM_BASE + "?q=" + encodeURIComponent(q + ", Chile") + "&format=json&limit=1&countrycodes=cl",
+        { headers: { "Accept-Language": "es" } })
+        .then(function (r) { return r.json(); })
+        .then(function (res) {
+            if (!res.length) { alert("No se encontro: " + q); return; }
+            var loc = { lat: parseFloat(res[0].lat), lng: parseFloat(res[0].lon), name: res[0].display_name.split(",")[0] };
+            if (which === "origin") state.plannerOrigin = loc;
+            else state.plannerDest = loc;
+        })
+        .catch(function () { alert("Error al buscar ubicacion."); });
+}
+
+// ---- Route Planning ----
+
+function planRoute() {
+    // Validate inputs
+    if (!state.plannerOrigin && dom.plannerOrigin.value.trim()) {
+        geocodePlannerField("origin");
+    }
+    if (!state.plannerDest && dom.plannerDest.value.trim()) {
+        geocodePlannerField("dest");
+    }
+
+    // Give geocoding a moment, then proceed
+    setTimeout(doRoutePlan, state.plannerOrigin && state.plannerDest ? 0 : 1200);
+}
+
+function doRoutePlan() {
+    if (!state.plannerOrigin || !state.plannerDest) {
+        alert("Ingresa un origen y un destino validos.");
+        return;
+    }
+
+    var battery = parseFloat(dom.plannerBattery.value) || 60;
+    var terrainKey = dom.plannerTerrain.value;
+    var t = TERRAIN[terrainKey] || TERRAIN.moderate;
+
+    dom.plannerGo.disabled = true;
+    showLoading(true, "Calculando ruta...");
+
+    var coords = state.plannerOrigin.lng + "," + state.plannerOrigin.lat + ";" + state.plannerDest.lng + "," + state.plannerDest.lat;
+    fetch(OSRM_BASE + "/" + coords + "?overview=full&geometries=geojson")
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+            if (!data.routes || !data.routes.length) {
+                alert("No se pudo calcular la ruta.");
+                showLoading(false);
+                dom.plannerGo.disabled = false;
+                return;
+            }
+
+            var route = data.routes[0];
+            var distKm = route.distance / 1000;
+            var durationMin = Math.round(route.duration / 60);
+            var routeCoords = route.geometry.coordinates; // [lng, lat]
+
+            // Estimate range
+            var consumption = t.consumption;
+            var rangeKm = (battery / consumption) * 100;
+
+            // Draw route
+            clearRoute();
+            drawRoute(routeCoords);
+
+            // Find stations along route, prioritizing DC
+            var routeStations = findStationsAlongRoute(routeCoords, ROUTE_CORRIDOR_KM);
+
+            // Select recommended stops based on range
+            var stops = selectChargingStops(routeStations, routeCoords, rangeKm, distKm);
+
+            // Render results
+            renderPlannerResults(distKm, durationMin, rangeKm, battery, t, stops);
+
+            // Add stop markers on map
+            addStopMarkers(stops);
+
+            // Fit map to route
+            var bounds = state.routeLayer.getBounds().pad(0.1);
+            state.map.fitBounds(bounds);
+
+            showLoading(false);
+            dom.plannerGo.disabled = false;
+        })
+        .catch(function (err) {
+            console.error("Route error:", err);
+            alert("Error al calcular la ruta. Intenta de nuevo.");
+            showLoading(false);
+            dom.plannerGo.disabled = false;
+        });
+}
+
+function drawRoute(coords) {
+    var latlngs = coords.map(function (c) { return [c[1], c[0]]; });
+    state.routeLayer = L.polyline(latlngs, {
+        color: "#10b981", weight: 5, opacity: 0.8,
+        dashArray: null, lineJoin: "round"
+    }).addTo(state.map);
+
+    // Origin marker
+    var originIcon = L.divIcon({
+        html: '<div style="width:16px;height:16px;border-radius:50%;background:#3b82f6;border:3px solid white;box-shadow:0 2px 6px rgba(0,0,0,0.3);"></div>',
+        className: "", iconSize: [16, 16], iconAnchor: [8, 8]
+    });
+    state.originMarker = L.marker(latlngs[0], { icon: originIcon }).addTo(state.map);
+    state.originMarker.bindPopup('<div class="popup-title">Origen</div><div class="popup-address">' + escapeHtml(state.plannerOrigin.name) + '</div>');
+
+    // Destination marker
+    var destIcon = L.divIcon({
+        html: '<div style="width:16px;height:16px;border-radius:50%;background:#ef4444;border:3px solid white;box-shadow:0 2px 6px rgba(0,0,0,0.3);"></div>',
+        className: "", iconSize: [16, 16], iconAnchor: [8, 8]
+    });
+    state.destMarker = L.marker(latlngs[latlngs.length - 1], { icon: destIcon }).addTo(state.map);
+    state.destMarker.bindPopup('<div class="popup-title">Destino</div><div class="popup-address">' + escapeHtml(state.plannerDest.name) + '</div>');
+}
+
+function clearRoute() {
+    if (state.routeLayer) { state.map.removeLayer(state.routeLayer); state.routeLayer = null; }
+    if (state.originMarker) { state.map.removeLayer(state.originMarker); state.originMarker = null; }
+    if (state.destMarker) { state.map.removeLayer(state.destMarker); state.destMarker = null; }
+    state.routeStopMarkers.forEach(function (m) { state.map.removeLayer(m); });
+    state.routeStopMarkers = [];
+}
+
+// ---- Find stations near route ----
+
+function findStationsAlongRoute(routeCoords, corridorKm) {
+    // Sample route every ~2km for efficiency
+    var samplePoints = [];
+    var totalDist = 0;
+    for (var i = 0; i < routeCoords.length; i++) {
+        if (i === 0) { samplePoints.push({ lat: routeCoords[0][1], lng: routeCoords[0][0], dist: 0 }); continue; }
+        totalDist += haversine(routeCoords[i - 1][1], routeCoords[i - 1][0], routeCoords[i][1], routeCoords[i][0]);
+        if (samplePoints.length === 0 || totalDist - samplePoints[samplePoints.length - 1].dist >= 2) {
+            samplePoints.push({ lat: routeCoords[i][1], lng: routeCoords[i][0], dist: totalDist });
+        }
+    }
+
+    // For each station, find minimum distance to route
+    var results = [];
+    state.allStations.forEach(function (s) {
+        var minDist = Infinity;
+        var nearestRouteDist = 0;
+        for (var j = 0; j < samplePoints.length; j++) {
+            var d = haversine(s.lat, s.lng, samplePoints[j].lat, samplePoints[j].lng);
+            if (d < minDist) {
+                minDist = d;
+                nearestRouteDist = samplePoints[j].dist;
+            }
+        }
+        if (minDist <= corridorKm) {
+            results.push({
+                station: s,
+                distToRoute: minDist,
+                kmAlongRoute: nearestRouteDist,
+                isDC: s.powerTypes.indexOf("DC") !== -1
+            });
+        }
+    });
+
+    // Sort by distance along route
+    results.sort(function (a, b) { return a.kmAlongRoute - b.kmAlongRoute; });
+    return results;
+}
+
+function selectChargingStops(routeStations, routeCoords, rangeKm, totalDistKm) {
+    // Usable range = 80% of full range (safety margin)
+    var usableRange = rangeKm * 0.8;
+    var stops = [];
+    var currentKm = 0;
+
+    // If total distance is within range, no stops needed
+    if (totalDistKm <= usableRange) {
+        // Still show available DC stations along the route as optional
+        var dcStations = routeStations.filter(function (r) { return r.isDC && r.station.hasAvailable; });
+        if (dcStations.length > 0) {
+            // Return top 3 DC stations near middle of route as optional stops
+            var mid = totalDistKm / 2;
+            dcStations.sort(function (a, b) {
+                return Math.abs(a.kmAlongRoute - mid) - Math.abs(b.kmAlongRoute - mid);
+            });
+            return dcStations.slice(0, 3).map(function (r) {
+                r.isOptional = true;
+                return r;
+            });
+        }
+        return [];
+    }
+
+    // Need charging stops
+    while (currentKm + usableRange < totalDistKm) {
+        var targetKm = currentKm + usableRange;
+
+        // Find best station near target km (prefer DC, available, closer to route)
+        var candidates = routeStations.filter(function (r) {
+            return r.kmAlongRoute > currentKm + 20 && r.kmAlongRoute <= targetKm + 10;
+        });
+
+        if (!candidates.length) {
+            // Expand search
+            candidates = routeStations.filter(function (r) {
+                return r.kmAlongRoute > currentKm + 10;
+            });
+        }
+
+        if (!candidates.length) break;
+
+        // Score candidates: DC + available = best
+        candidates.sort(function (a, b) {
+            var scoreA = (a.isDC ? 0 : 100) + (a.station.hasAvailable ? 0 : 50) + a.distToRoute * 5 + Math.abs(a.kmAlongRoute - (currentKm + usableRange * 0.7)) * 0.5;
+            var scoreB = (b.isDC ? 0 : 100) + (b.station.hasAvailable ? 0 : 50) + b.distToRoute * 5 + Math.abs(b.kmAlongRoute - (currentKm + usableRange * 0.7)) * 0.5;
+            return scoreA - scoreB;
+        });
+
+        var best = candidates[0];
+        best.isOptional = false;
+        stops.push(best);
+        currentKm = best.kmAlongRoute;
+    }
+
+    return stops;
+}
+
+// ---- Render planner results ----
+
+function renderPlannerResults(distKm, durationMin, rangeKm, battery, terrain, stops) {
+    var hours = Math.floor(durationMin / 60);
+    var mins = durationMin % 60;
+    var timeStr = hours > 0 ? hours + "h " + mins + "min" : mins + " min";
+
+    var needsCharge = distKm > rangeKm * 0.8;
+    var rangeClass = !needsCharge ? "val-success" : distKm > rangeKm ? "val-danger" : "val-warning";
+
+    var summaryHtml = '<div class="planner-summary-row">' +
+        '<span class="planner-summary-label">Distancia total</span>' +
+        '<span class="planner-summary-value">' + distKm.toFixed(0) + ' km</span></div>';
+    summaryHtml += '<div class="planner-summary-row">' +
+        '<span class="planner-summary-label">Tiempo estimado</span>' +
+        '<span class="planner-summary-value">' + timeStr + '</span></div>';
+    summaryHtml += '<div class="planner-summary-row">' +
+        '<span class="planner-summary-label">Autonomia estimada</span>' +
+        '<span class="planner-summary-value ' + rangeClass + '">~' + Math.round(rangeKm) + ' km</span></div>';
+    summaryHtml += '<div class="planner-summary-row">' +
+        '<span class="planner-summary-label">Consumo estimado</span>' +
+        '<span class="planner-summary-value">' + (distKm * terrain.consumption / 100).toFixed(1) + ' kWh (' + terrain.consumption + ' kWh/100km)</span></div>';
+
+    if (stops.length > 0 && !stops[0].isOptional) {
+        summaryHtml += '<div class="planner-summary-row">' +
+            '<span class="planner-summary-label">Paradas necesarias</span>' +
+            '<span class="planner-summary-value val-warning">' + stops.length + '</span></div>';
+    }
+
+    dom.plannerSummary.innerHTML = summaryHtml;
+
+    // Stops list
+    if (stops.length === 0) {
+        dom.plannerStopsCount.textContent = "";
+        dom.plannerStopsList.innerHTML = '<div class="empty-state"><p>No se necesitan paradas de carga para este recorrido.</p></div>';
+    } else {
+        var optionalAll = stops.every(function (s) { return s.isOptional; });
+        dom.plannerStopsCount.textContent = stops.length + (optionalAll ? " opcionales" : " parada" + (stops.length !== 1 ? "s" : ""));
+
+        var stopsHtml = "";
+        stops.forEach(function (stop, i) {
+            var s = stop.station;
+            var cardCls = stop.isDC ? "stop-dc" : "stop-ac";
+            var tagsHtml = "";
+            if (stop.isDC) tagsHtml += '<span class="tag tag-power">DC Rapida</span>';
+            else tagsHtml += '<span class="tag tag-type">AC Lenta</span>';
+            s.standards.forEach(function (st) { tagsHtml += '<span class="tag tag-connector">' + escapeHtml(st) + '</span>'; });
+            if (s.maxPower > 0) tagsHtml += '<span class="tag tag-power">' + s.maxPower + ' kW</span>';
+            if (s.hasAvailable) tagsHtml += '<span class="tag tag-status-available">Disponible</span>';
+            else tagsHtml += '<span class="tag tag-status-unavailable">No disponible</span>';
+            if (stop.isOptional) tagsHtml += '<span class="tag tag-24h">Opcional</span>';
+
+            stopsHtml += '<div class="station-card ' + cardCls + ' stop-card" data-lat="' + s.lat + '" data-lng="' + s.lng + '">' +
+                '<span class="stop-number">' + (i + 1) + '</span>' +
+                '<div class="stop-km">Km ' + Math.round(stop.kmAlongRoute) + ' de la ruta \u00b7 ' + stop.distToRoute.toFixed(1) + ' km del camino</div>' +
+                '<div class="stop-name">' + escapeHtml(s.name) + '</div>' +
+                '<div class="stop-address">' + escapeHtml([s.address, s.commune].filter(Boolean).join(", ")) + '</div>' +
+                '<div class="stop-tags">' + tagsHtml + '</div></div>';
+        });
+
+        stopsHtml += '<button class="planner-clear" id="planner-clear-btn">Limpiar ruta</button>';
+        dom.plannerStopsList.innerHTML = stopsHtml;
+
+        // Click on stop card => zoom to it
+        dom.plannerStopsList.querySelectorAll(".stop-card").forEach(function (card) {
+            card.addEventListener("click", function () {
+                var lat = parseFloat(this.dataset.lat), lng = parseFloat(this.dataset.lng);
+                if (!isNaN(lat) && !isNaN(lng)) {
+                    state.map.setView([lat, lng], 15);
+                    dom.sidebar.classList.remove("open");
+                }
+            });
+        });
+
+        // Clear route button
+        var clearBtn = document.getElementById("planner-clear-btn");
+        if (clearBtn) {
+            clearBtn.addEventListener("click", function (e) {
+                e.stopPropagation();
+                clearRoute();
+                dom.plannerResults.classList.add("hidden");
+                state.plannerOrigin = null;
+                state.plannerDest = null;
+                dom.plannerOrigin.value = "";
+                dom.plannerDest.value = "";
+            });
+        }
+    }
+
+    dom.plannerResults.classList.remove("hidden");
+}
+
+function addStopMarkers(stops) {
+    stops.forEach(function (stop, i) {
+        var color = stop.isDC ? "#f59e0b" : "#3b82f6";
+        var icon = L.divIcon({
+            html: '<div style="width:28px;height:28px;border-radius:50%;background:' + color + ';border:3px solid white;box-shadow:0 2px 8px rgba(0,0,0,0.3);display:flex;align-items:center;justify-content:center;color:' + (stop.isDC ? '#000' : '#fff') + ';font-size:12px;font-weight:700;">' + (i + 1) + '</div>',
+            className: "", iconSize: [28, 28], iconAnchor: [14, 14]
+        });
+        var m = L.marker([stop.station.lat, stop.station.lng], { icon: icon, zIndexOffset: 500 }).addTo(state.map);
+        m.bindPopup(buildPopup(stop.station), { maxWidth: 340 });
+        state.routeStopMarkers.push(m);
+    });
 }
 
 // ============================================
