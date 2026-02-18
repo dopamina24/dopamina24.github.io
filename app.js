@@ -425,8 +425,21 @@ function normalizeStation(item) {
         var evseStatus = (evse.status || "").toUpperCase();
         if (isEvseAvailable(evseStatus)) availableCount++;
         else if (!isEvseUnavailable(evseStatus)) inUseCount++;
+        // In OCPI, only 1 connector per EVSE can be used at a time.
+        // The EVSE status is the source of truth for occupancy.
+        var evseInUse = !isEvseAvailable(evseStatus) && !isEvseUnavailable(evseStatus);
         (evse.connectors || []).forEach(function (c) {
-            var rawStatus = (c.status || evse.status || "UNKNOWN").toUpperCase();
+            var rawStatus;
+            if (evseInUse) {
+                // EVSE is in use (CHARGING, etc.) — all its connectors are occupied
+                rawStatus = evseStatus;
+            } else if (isEvseAvailable(evseStatus)) {
+                // EVSE available — use connector's own status
+                rawStatus = (c.status || "AVAILABLE").toUpperCase();
+            } else {
+                // EVSE unavailable — connectors inherit that
+                rawStatus = (c.status || evse.status || "UNKNOWN").toUpperCase();
+            }
             connectors.push({
                 standard: c.standard || "Desconocido",
                 powerType: c.power_type || "N/A",
@@ -569,23 +582,23 @@ function connIcon(standard) { return CONNECTOR_ICONS[standard] || CONN_ICON_DEFA
 
 function statusCls(status) {
     var s = (status || "").toUpperCase();
-    if (s === "AVAILABLE" || s === "DISPONIBLE") return "cs-available";
-    if (s === "CHARGING" || s === "EN USO" || s === "RESERVED") return "cs-inuse";
-    return "cs-unavailable";
+    if (isEvseAvailable(s)) return "cs-available";
+    if (isEvseUnavailable(s)) return "cs-unavailable";
+    return "cs-inuse"; // CHARGING, RESERVED, OCCUPIED, etc.
 }
 
 function statusLabel(status) {
     var s = (status || "").toUpperCase();
     if (s === "AVAILABLE" || s === "DISPONIBLE") return "Disponible";
-    if (s === "CHARGING" || s === "EN USO") return "En uso";
-    if (s === "RESERVED") return "Reservado";
     if (s === "OUTOFORDER" || s === "FUERA DE SERVICIO") return "Fuera de servicio";
     if (s === "INOPERATIVE") return "Inoperativo";
     if (s === "BLOCKED") return "Bloqueado";
     if (s === "PLANNED") return "Planificado";
     if (s === "REMOVED") return "Removido";
-    if (s === "UNKNOWN") return "Sin info";
-    return "No disponible";
+    if (s === "UNKNOWN" || s === "") return "Sin info";
+    // Everything else is "in use" (CHARGING, RESERVED, OCCUPIED, etc.)
+    if (s === "RESERVED") return "Reservado";
+    return "En uso";
 }
 
 // ============================================
