@@ -400,19 +400,31 @@ function fetchPage(page) {
         .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); });
 }
 
+// Statuses that mean the charger is broken/offline (not in use)
+var UNAVAILABLE_STATUSES = ["OUTOFORDER", "FUERA DE SERVICIO", "INOPERATIVE", "BLOCKED", "PLANNED", "REMOVED", "UNKNOWN", ""];
+
+function isEvseAvailable(status) {
+    var s = (status || "").toUpperCase();
+    return s === "AVAILABLE" || s === "DISPONIBLE";
+}
+
+function isEvseUnavailable(status) {
+    var s = (status || "").toUpperCase();
+    return UNAVAILABLE_STATUSES.indexOf(s) !== -1;
+}
+
 function normalizeStation(item) {
     var connectors = [];
     var maxPower = 0;
     var evseCount = 0;
     var availableCount = 0;
-
     var inUseCount = 0;
 
     (item.evses || []).forEach(function (evse) {
         evseCount++;
         var evseStatus = (evse.status || "").toUpperCase();
-        if (evseStatus === "AVAILABLE" || evseStatus === "DISPONIBLE") availableCount++;
-        if (evseStatus === "CHARGING" || evseStatus === "EN USO") inUseCount++;
+        if (isEvseAvailable(evseStatus)) availableCount++;
+        else if (!isEvseUnavailable(evseStatus)) inUseCount++;
         (evse.connectors || []).forEach(function (c) {
             var rawStatus = (c.status || evse.status || "UNKNOWN").toUpperCase();
             connectors.push({
