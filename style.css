@@ -117,6 +117,13 @@ body {
 
 .ac-meta { font-size: 0.7rem; color: var(--text-muted); margin-top: 2px; }
 
+.ac-section {
+    padding: 6px 14px; font-size: 0.65rem; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.08em;
+    color: var(--text-muted); background: var(--bg-dark);
+    border-bottom: 1px solid var(--border);
+}
+
 /* ---- Buttons ---- */
 .btn {
     display: inline-flex; align-items: center; justify-content: center;
@@ -210,6 +217,7 @@ body {
 .station-card:hover { border-color: var(--primary); background: #1a2744; }
 
 .station-card.card-available { border-left-color: var(--success); }
+.station-card.card-inuse { border-left-color: var(--warning); }
 .station-card.card-unavailable { border-left-color: var(--danger); }
 
 .station-card-header {
@@ -271,6 +279,7 @@ body {
 .tag-connector { background: rgba(16,185,129,0.15); color: var(--primary); }
 .tag-power { background: rgba(245,158,11,0.15); color: var(--warning); }
 .tag-status-available { background: rgba(16,185,129,0.15); color: var(--success); }
+.tag-status-inuse { background: rgba(245,158,11,0.15); color: var(--warning); }
 .tag-status-unavailable { background: rgba(239,68,68,0.15); color: var(--danger); }
 .tag-24h { background: rgba(59,130,246,0.15); color: var(--info); }
 
@@ -438,6 +447,7 @@ body {
 }
 
 .marker-icon-fast { background: var(--warning); }
+.marker-icon-inuse { background: var(--warning); opacity: 0.85; }
 .marker-icon-unavailable { background: #6b7280; opacity: 0.7; }
 
 .marker-user {
@@ -485,6 +495,11 @@ body {
 .popup-status-bar.bar-available {
     background: rgba(16,185,129,0.15); color: var(--success);
     border: 1px solid rgba(16,185,129,0.3);
+}
+
+.popup-status-bar.bar-inuse {
+    background: rgba(245,158,11,0.12); color: var(--warning);
+    border: 1px solid rgba(245,158,11,0.25);
 }
 
 .popup-status-bar.bar-unavailable {
