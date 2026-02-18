@@ -246,14 +246,16 @@ function normalizeStation(item) {
 
     (item.evses || []).forEach(function (evse) {
         evseCount++;
-        if (evse.status === "DISPONIBLE") availableCount++;
+        var evseStatus = (evse.status || "").toUpperCase();
+        if (evseStatus === "AVAILABLE" || evseStatus === "DISPONIBLE") availableCount++;
         (evse.connectors || []).forEach(function (c) {
+            var rawStatus = (c.status || evse.status || "UNKNOWN").toUpperCase();
             connectors.push({
                 standard: c.standard || "Desconocido",
                 powerType: c.power_type || "N/A",
                 maxPower: c.max_electric_power || 0,
                 format: c.format || "",
-                status: c.status || evse.status || "DESCONOCIDO"
+                status: rawStatus
             });
             if (c.max_electric_power > maxPower) maxPower = c.max_electric_power;
         });
@@ -385,15 +387,23 @@ function applyFilters() {
 function connIcon(standard) { return CONNECTOR_ICONS[standard] || CONN_ICON_DEFAULT; }
 
 function statusCls(status) {
-    if (status === "DISPONIBLE") return "cs-available";
-    if (status === "EN USO") return "cs-inuse";
+    var s = (status || "").toUpperCase();
+    if (s === "AVAILABLE" || s === "DISPONIBLE") return "cs-available";
+    if (s === "CHARGING" || s === "EN USO" || s === "RESERVED") return "cs-inuse";
     return "cs-unavailable";
 }
 
 function statusLabel(status) {
-    if (status === "DISPONIBLE") return "Disponible";
-    if (status === "EN USO") return "En uso";
-    if (status === "FUERA DE SERVICIO") return "Fuera de servicio";
+    var s = (status || "").toUpperCase();
+    if (s === "AVAILABLE" || s === "DISPONIBLE") return "Disponible";
+    if (s === "CHARGING" || s === "EN USO") return "En uso";
+    if (s === "RESERVED") return "Reservado";
+    if (s === "OUTOFORDER" || s === "FUERA DE SERVICIO") return "Fuera de servicio";
+    if (s === "INOPERATIVE") return "Inoperativo";
+    if (s === "BLOCKED") return "Bloqueado";
+    if (s === "PLANNED") return "Planificado";
+    if (s === "REMOVED") return "Removido";
+    if (s === "UNKNOWN") return "Sin info";
     return "No disponible";
 }
 
