@@ -64,6 +64,7 @@ function cacheDom() {
     dom.connectorFilters = document.getElementById("connector-filters");
     dom.powerTypeFilters = document.getElementById("power-type-filters");
     dom.statusFilter = document.getElementById("status-filter");
+    dom.ownerFilter = document.getElementById("owner-filter");
     dom.resultsList = document.getElementById("results-list");
     dom.resultsCount = document.getElementById("results-count");
     dom.loading = document.getElementById("loading");
@@ -153,6 +154,7 @@ function initEvents() {
     dom.connectorFilters.addEventListener("change", function (e) { handleFilterToggle(e, dom.connectorFilters); });
     dom.powerTypeFilters.addEventListener("change", function (e) { handleFilterToggle(e, dom.powerTypeFilters); });
     dom.statusFilter.addEventListener("change", applyFilters);
+    dom.ownerFilter.addEventListener("change", applyFilters);
 
     dom.sidebarToggle.addEventListener("click", function () { dom.sidebar.classList.add("open"); });
     dom.sidebarClose.addEventListener("click", function () { dom.sidebar.classList.remove("open"); });
@@ -187,6 +189,18 @@ function handleFilterToggle(e, container) {
 // ============================================
 // Autocomplete - Predictive commune search
 // ============================================
+
+function buildOwnerOptions() {
+    var owners = {};
+    state.allStations.forEach(function (s) {
+        if (s.owner && s.owner !== "Desconocido") owners[s.owner] = (owners[s.owner] || 0) + 1;
+    });
+    var sorted = Object.keys(owners).sort(function (a, b) { return owners[b] - owners[a]; });
+    dom.ownerFilter.innerHTML = '<option value="all">Todos</option>';
+    sorted.forEach(function (o) {
+        dom.ownerFilter.innerHTML += '<option value="' + escapeAttr(o) + '">' + escapeHtml(o) + ' (' + owners[o] + ')</option>';
+    });
+}
 
 function buildCommuneIndex() {
     var map = {};
@@ -334,6 +348,7 @@ function loadAllStations() {
         state.allStations = cached.map(normalizeStation);
         state.stations = state.allStations.slice();
         buildCommuneIndex();
+        buildOwnerOptions();
         dom.dataInfo.textContent = state.allStations.length + " estaciones | EcoCarga (cache)";
         tryGeolocation();
         // Refresh in background for next visit
@@ -377,12 +392,14 @@ function fetchAllFromAPI(silent) {
             state.allStations = items.map(normalizeStation);
             state.stations = state.allStations.slice();
             buildCommuneIndex();
+            buildOwnerOptions();
             dom.dataInfo.textContent = state.allStations.length + " estaciones | EcoCarga";
             tryGeolocation();
         } else {
             state.allStations = items.map(normalizeStation);
             state.stations = state.allStations.slice();
             buildCommuneIndex();
+            buildOwnerOptions();
             dom.dataInfo.textContent = state.allStations.length + " estaciones | EcoCarga";
         }
     }).catch(function (err) {
@@ -560,6 +577,7 @@ function applyFilters() {
     var cVals = getSelectedValues(dom.connectorFilters);
     var pVals = getSelectedValues(dom.powerTypeFilters);
     var sVal = dom.statusFilter.value;
+    var oVal = dom.ownerFilter.value;
 
     var filtered = state.stations.filter(function (s) {
         if (cVals && !s.standards.some(function (st) { return cVals.indexOf(st) !== -1; })) return false;
@@ -567,6 +585,7 @@ function applyFilters() {
         if (sVal === "available" && !s.hasAvailable) return false;
         if (sVal === "inuse" && !s.hasInUse) return false;
         if (sVal === "unavailable" && (s.hasAvailable || s.hasInUse)) return false;
+        if (oVal !== "all" && s.owner !== oVal) return false;
         return true;
     });
 
