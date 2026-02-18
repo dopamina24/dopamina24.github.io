@@ -64,6 +64,7 @@ function cacheDom() {
     dom.connectorFilters = document.getElementById("connector-filters");
     dom.powerTypeFilters = document.getElementById("power-type-filters");
     dom.statusFilter = document.getElementById("status-filter");
+    dom.ownerFilter = document.getElementById("owner-filter");
     dom.resultsList = document.getElementById("results-list");
     dom.resultsCount = document.getElementById("results-count");
     dom.loading = document.getElementById("loading");
@@ -153,6 +154,7 @@ function initEvents() {
     dom.connectorFilters.addEventListener("change", function (e) { handleFilterToggle(e, dom.connectorFilters); });
     dom.powerTypeFilters.addEventListener("change", function (e) { handleFilterToggle(e, dom.powerTypeFilters); });
     dom.statusFilter.addEventListener("change", applyFilters);
+    dom.ownerFilter.addEventListener("change", applyFilters);
 
     dom.sidebarToggle.addEventListener("click", function () { dom.sidebar.classList.add("open"); });
     dom.sidebarClose.addEventListener("click", function () { dom.sidebar.classList.remove("open"); });
@@ -187,6 +189,18 @@ function handleFilterToggle(e, container) {
 // ============================================
 // Autocomplete - Predictive commune search
 // ============================================
+
+function buildOwnerOptions() {
+    var owners = {};
+    state.allStations.forEach(function (s) {
+        if (s.owner && s.owner !== "Desconocido") owners[s.owner] = (owners[s.owner] || 0) + 1;
+    });
+    var sorted = Object.keys(owners).sort(function (a, b) { return owners[b] - owners[a]; });
+    dom.ownerFilter.innerHTML = '<option value="all">Todos</option>';
+    sorted.forEach(function (o) {
+        dom.ownerFilter.innerHTML += '<option value="' + escapeAttr(o) + '">' + escapeHtml(o) + ' (' + owners[o] + ')</option>';
+    });
+}
 
 function buildCommuneIndex() {
     var map = {};
@@ -334,6 +348,7 @@ function loadAllStations() {
         state.allStations = cached.map(normalizeStation);
         state.stations = state.allStations.slice();
         buildCommuneIndex();
+        buildOwnerOptions();
         dom.dataInfo.textContent = state.allStations.length + " estaciones | EcoCarga (cache)";
         tryGeolocation();
         // Refresh in background for next visit
@@ -363,17 +378,28 @@ function fetchAllFromAPI(silent) {
             localStorage.setItem(CACHE_KEY, JSON.stringify({ ts: Date.now(), data: items }));
         } catch (e) { /* quota exceeded, ignore */ }
 
+        // Debug: log all unique raw EVSE statuses so we can see what the API returns
+        var rawStatuses = {};
+        items.forEach(function (item) {
+            (item.evses || []).forEach(function (evse) {
+                var s = evse.status || "(vacío)";
+                rawStatuses[s] = (rawStatuses[s] || 0) + 1;
+            });
+        });
+        console.log("[ElectroChile] EVSE statuses de la API:", rawStatuses);
+
         if (!silent) {
             state.allStations = items.map(normalizeStation);
             state.stations = state.allStations.slice();
             buildCommuneIndex();
+            buildOwnerOptions();
             dom.dataInfo.textContent = state.allStations.length + " estaciones | EcoCarga";
             tryGeolocation();
         } else {
-            // Update data silently for next filter/search
             state.allStations = items.map(normalizeStation);
             state.stations = state.allStations.slice();
             buildCommuneIndex();
+            buildOwnerOptions();
             dom.dataInfo.textContent = state.allStations.length + " estaciones | EcoCarga";
         }
     }).catch(function (err) {
@@ -400,17 +426,18 @@ function fetchPage(page) {
         .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); });
 }
 
-// Statuses that mean the charger is broken/offline (not in use)
-var UNAVAILABLE_STATUSES = ["OUTOFORDER", "FUERA DE SERVICIO", "INOPERATIVE", "BLOCKED", "PLANNED", "REMOVED", "UNKNOWN", ""];
+// Statuses that mean the charger is actively being used (OCPI whitelist)
+// Only explicitly known "in use" statuses — everything else that's not AVAILABLE is treated as unavailable
+var IN_USE_STATUSES = ["CHARGING", "FINISHING"];
 
 function isEvseAvailable(status) {
     var s = (status || "").toUpperCase();
     return s === "AVAILABLE" || s === "DISPONIBLE";
 }
 
-function isEvseUnavailable(status) {
+function isEvseInUse(status) {
     var s = (status || "").toUpperCase();
-    return UNAVAILABLE_STATUSES.indexOf(s) !== -1;
+    return IN_USE_STATUSES.indexOf(s) !== -1;
 }
 
 function normalizeStation(item) {
@@ -424,22 +451,12 @@ function normalizeStation(item) {
         evseCount++;
         var evseStatus = (evse.status || "").toUpperCase();
         if (isEvseAvailable(evseStatus)) availableCount++;
-        else if (!isEvseUnavailable(evseStatus)) inUseCount++;
-        // In OCPI, only 1 connector per EVSE can be used at a time.
-        // The EVSE status is the source of truth for occupancy.
-        var evseInUse = !isEvseAvailable(evseStatus) && !isEvseUnavailable(evseStatus);
+        else if (isEvseInUse(evseStatus)) inUseCount++;
+        // EVSE status is source of truth. Connectors inherit it.
         (evse.connectors || []).forEach(function (c) {
-            var rawStatus;
-            if (evseInUse) {
-                // EVSE is in use (CHARGING, etc.) — all its connectors are occupied
-                rawStatus = evseStatus;
-            } else if (isEvseAvailable(evseStatus)) {
-                // EVSE available — use connector's own status
-                rawStatus = (c.status || "AVAILABLE").toUpperCase();
-            } else {
-                // EVSE unavailable — connectors inherit that
-                rawStatus = (c.status || evse.status || "UNKNOWN").toUpperCase();
-            }
+            // Always use EVSE status as the authoritative status for display.
+            // The connector-level status is often stale or inconsistent in EcoCarga data.
+            var rawStatus = evseStatus || (c.status || "UNKNOWN").toUpperCase();
             connectors.push({
                 standard: c.standard || "Desconocido",
                 powerType: c.power_type || "N/A",
@@ -560,6 +577,7 @@ function applyFilters() {
     var cVals = getSelectedValues(dom.connectorFilters);
     var pVals = getSelectedValues(dom.powerTypeFilters);
     var sVal = dom.statusFilter.value;
+    var oVal = dom.ownerFilter.value;
 
     var filtered = state.stations.filter(function (s) {
         if (cVals && !s.standards.some(function (st) { return cVals.indexOf(st) !== -1; })) return false;
@@ -567,6 +585,7 @@ function applyFilters() {
         if (sVal === "available" && !s.hasAvailable) return false;
         if (sVal === "inuse" && !s.hasInUse) return false;
         if (sVal === "unavailable" && (s.hasAvailable || s.hasInUse)) return false;
+        if (oVal !== "all" && s.owner !== oVal) return false;
         return true;
     });
 
@@ -583,22 +602,22 @@ function connIcon(standard) { return CONNECTOR_ICONS[standard] || CONN_ICON_DEFA
 function statusCls(status) {
     var s = (status || "").toUpperCase();
     if (isEvseAvailable(s)) return "cs-available";
-    if (isEvseUnavailable(s)) return "cs-unavailable";
-    return "cs-inuse"; // CHARGING, RESERVED, OCCUPIED, etc.
+    if (isEvseInUse(s)) return "cs-inuse";
+    return "cs-unavailable";
 }
 
 function statusLabel(status) {
     var s = (status || "").toUpperCase();
     if (s === "AVAILABLE" || s === "DISPONIBLE") return "Disponible";
-    if (s === "OUTOFORDER" || s === "FUERA DE SERVICIO") return "Fuera de servicio";
+    if (s === "CHARGING" || s === "FINISHING") return "En uso";
+    if (s === "RESERVED") return "Reservado";
+    if (s === "OUTOFORDER") return "Fuera de servicio";
     if (s === "INOPERATIVE") return "Inoperativo";
     if (s === "BLOCKED") return "Bloqueado";
     if (s === "PLANNED") return "Planificado";
     if (s === "REMOVED") return "Removido";
-    if (s === "UNKNOWN" || s === "") return "Sin info";
-    // Everything else is "in use" (CHARGING, RESERVED, OCCUPIED, etc.)
-    if (s === "RESERVED") return "Reservado";
-    return "En uso";
+    // Unknown or any other status — show the raw value for debugging
+    return s || "Sin info";
 }
 
 // ============================================
