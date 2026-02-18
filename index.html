@@ -19,10 +19,13 @@
         </div>
 
         <div class="sidebar-content">
-            <!-- Search -->
+            <!-- Search with autocomplete -->
             <div class="search-section">
                 <div class="search-box">
-                    <input type="text" id="search-input" placeholder="Buscar direcci&oacute;n, ciudad o comuna..." autocomplete="off">
+                    <div class="search-input-wrap">
+                        <input type="text" id="search-input" placeholder="Buscar comuna, ciudad o direcci&oacute;n..." autocomplete="off">
+                        <div id="autocomplete-list" class="ac-list hidden"></div>
+                    </div>
                     <button id="search-btn" class="btn btn-search" aria-label="Buscar">
                         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
                     </button>
@@ -48,36 +51,20 @@
                 <div class="filter-group">
                     <label class="filter-label">Tipo de conector</label>
                     <div class="connector-filters" id="connector-filters">
-                        <label class="checkbox-label">
-                            <input type="checkbox" value="all" checked> Todos
-                        </label>
-                        <label class="checkbox-label">
-                            <input type="checkbox" value="CCS 2"> CCS 2
-                        </label>
-                        <label class="checkbox-label">
-                            <input type="checkbox" value="Tipo 2"> Tipo 2 (Mennekes)
-                        </label>
-                        <label class="checkbox-label">
-                            <input type="checkbox" value="CHAdeMO"> CHAdeMO
-                        </label>
-                        <label class="checkbox-label">
-                            <input type="checkbox" value="Tipo 1"> Tipo 1 (J1772)
-                        </label>
+                        <label class="checkbox-label"><input type="checkbox" value="all" checked> Todos</label>
+                        <label class="checkbox-label"><input type="checkbox" value="CCS 2"> CCS 2</label>
+                        <label class="checkbox-label"><input type="checkbox" value="Tipo 2"> Tipo 2 (Mennekes)</label>
+                        <label class="checkbox-label"><input type="checkbox" value="CHAdeMO"> CHAdeMO</label>
+                        <label class="checkbox-label"><input type="checkbox" value="Tipo 1"> Tipo 1 (J1772)</label>
                     </div>
                 </div>
 
                 <div class="filter-group">
                     <label class="filter-label">Tipo de corriente</label>
                     <div class="power-type-filters" id="power-type-filters">
-                        <label class="checkbox-label">
-                            <input type="checkbox" value="all" checked> Todos
-                        </label>
-                        <label class="checkbox-label">
-                            <input type="checkbox" value="DC"> DC (Carga r&aacute;pida)
-                        </label>
-                        <label class="checkbox-label">
-                            <input type="checkbox" value="AC"> AC (Carga lenta)
-                        </label>
+                        <label class="checkbox-label"><input type="checkbox" value="all" checked> Todos</label>
+                        <label class="checkbox-label"><input type="checkbox" value="DC"> DC (Carga r&aacute;pida)</label>
+                        <label class="checkbox-label"><input type="checkbox" value="AC"> AC (Carga lenta)</label>
                     </div>
                 </div>
 
@@ -103,7 +90,7 @@
                 </div>
             </div>
 
-            <!-- Data source info -->
+            <!-- Data source -->
             <div class="data-source">
                 <span id="data-info">Conectando...</span>
             </div>
@@ -118,7 +105,7 @@
     <!-- Map -->
     <div id="map"></div>
 
-    <!-- Loading overlay -->
+    <!-- Loading -->
     <div id="loading" class="loading hidden">
         <div class="spinner"></div>
         <p id="loading-text">Buscando electrolineras...</p>
