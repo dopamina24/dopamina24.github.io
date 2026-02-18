@@ -1,5 +1,6 @@
 /* ==========================================
    ElectroChile - EV Charging Station Finder
+   Powered by EcoCarga (Ministerio de Energia)
    ========================================== */
 
 :root {
@@ -16,6 +17,7 @@
     --danger: #ef4444;
     --warning: #f59e0b;
     --success: #10b981;
+    --info: #3b82f6;
     --sidebar-width: 380px;
     --radius: 8px;
 }
@@ -207,7 +209,7 @@ body {
 }
 
 .connector-filters,
-.level-filters {
+.power-type-filters {
     display: flex;
     flex-direction: column;
     gap: 6px;
@@ -226,6 +228,23 @@ body {
     accent-color: var(--primary);
     width: 14px;
     height: 14px;
+}
+
+/* Select filter (status dropdown) */
+.select-filter {
+    width: 100%;
+    padding: 8px 12px;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text-primary);
+    font-size: 0.8rem;
+    outline: none;
+    cursor: pointer;
+}
+
+.select-filter:focus {
+    border-color: var(--primary);
 }
 
 /* ---- Results ---- */
@@ -259,6 +278,19 @@ body {
     line-height: 1.5;
 }
 
+/* Data source footer */
+.data-source {
+    padding: 12px 0 4px;
+    border-top: 1px solid var(--border);
+    margin-top: 16px;
+    text-align: center;
+}
+
+.data-source span {
+    font-size: 0.7rem;
+    color: var(--text-muted);
+}
+
 /* Station Card */
 .station-card {
     background: var(--bg-card);
@@ -278,7 +310,7 @@ body {
     display: flex;
     justify-content: space-between;
     align-items: flex-start;
-    margin-bottom: 6px;
+    margin-bottom: 4px;
 }
 
 .station-name {
@@ -300,6 +332,12 @@ body {
 .station-address {
     font-size: 0.75rem;
     color: var(--text-muted);
+    margin-bottom: 4px;
+}
+
+.station-owner {
+    font-size: 0.7rem;
+    color: var(--text-secondary);
     margin-bottom: 8px;
 }
 
@@ -309,6 +347,7 @@ body {
     gap: 4px;
 }
 
+/* Tags */
 .tag {
     display: inline-block;
     padding: 2px 8px;
@@ -327,14 +366,28 @@ body {
     color: var(--warning);
 }
 
-.tag-status-operational {
+.tag-status-available {
     background: rgba(16, 185, 129, 0.15);
     color: var(--success);
 }
 
-.tag-status-unknown {
+.tag-status-unavailable {
+    background: rgba(239, 68, 68, 0.15);
+    color: var(--danger);
+}
+
+.tag-24h {
+    background: rgba(59, 130, 246, 0.15);
+    color: var(--info);
+}
+
+.tag-type {
     background: rgba(100, 116, 139, 0.15);
-    color: var(--text-muted);
+    color: var(--text-secondary);
+    max-width: 200px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 /* ---- Map ---- */
@@ -365,6 +418,11 @@ body {
 
 .marker-icon-fast {
     background: var(--warning);
+}
+
+.marker-icon-unavailable {
+    background: #6b7280;
+    opacity: 0.7;
 }
 
 .marker-user {
@@ -427,14 +485,68 @@ body {
 .popup-title {
     font-weight: 700;
     font-size: 0.95rem;
-    margin-bottom: 6px;
+    margin-bottom: 2px;
     color: var(--primary);
+}
+
+.popup-owner {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    margin-bottom: 6px;
 }
 
 .popup-address {
     color: var(--text-secondary);
     font-size: 0.8rem;
-    margin-bottom: 10px;
+    margin-bottom: 8px;
+}
+
+.popup-meta {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    margin-bottom: 6px;
+}
+
+.popup-status {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.8rem;
+    font-weight: 500;
+    margin-bottom: 8px;
+}
+
+/* Status dot indicator */
+.status-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.status-dot.status-available {
+    background: var(--success);
+    box-shadow: 0 0 4px var(--success);
+}
+
+.status-dot.status-unavailable {
+    background: var(--danger);
+}
+
+.status-dot.status-in-use {
+    background: var(--warning);
+}
+
+.status-dot.status-offline {
+    background: var(--text-muted);
+}
+
+.popup-badges {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-bottom: 8px;
 }
 
 .popup-connectors {
@@ -517,76 +629,6 @@ body {
 .loading p {
     font-size: 0.85rem;
     color: var(--text-secondary);
-}
-
-/* ---- Modal ---- */
-.modal {
-    position: fixed;
-    inset: 0;
-    z-index: 3000;
-    background: rgba(0, 0, 0, 0.7);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 20px;
-}
-
-.modal-content {
-    background: var(--bg-card);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 28px;
-    max-width: 440px;
-    width: 100%;
-}
-
-.modal-content h2 {
-    font-size: 1.2rem;
-    margin-bottom: 12px;
-}
-
-.modal-content p {
-    font-size: 0.85rem;
-    color: var(--text-secondary);
-    margin-bottom: 14px;
-    line-height: 1.5;
-}
-
-.modal-content a {
-    color: var(--primary);
-}
-
-.modal-content ol {
-    font-size: 0.8rem;
-    color: var(--text-secondary);
-    padding-left: 20px;
-    margin-bottom: 16px;
-    line-height: 1.7;
-}
-
-.modal-content input {
-    width: 100%;
-    padding: 10px 14px;
-    background: var(--bg-input);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    color: var(--text-primary);
-    font-size: 0.875rem;
-    margin-bottom: 16px;
-    outline: none;
-}
-
-.modal-content input:focus {
-    border-color: var(--primary);
-}
-
-.modal-actions {
-    display: flex;
-    gap: 10px;
-}
-
-.modal-actions .btn {
-    flex: 1;
 }
 
 /* ---- Utilities ---- */
