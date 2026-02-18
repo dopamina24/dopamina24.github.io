@@ -393,15 +393,30 @@ function fetchAllFromAPI(silent) {
             localStorage.setItem(CACHE_KEY, JSON.stringify({ ts: Date.now(), data: items }));
         } catch (e) { /* quota exceeded, ignore */ }
 
-        // Debug: log all unique raw EVSE statuses so we can see what the API returns
-        var rawStatuses = {};
+        // Debug: log all unique EVSE and connector statuses
+        var rawEvseStatuses = {};
+        var rawConnStatuses = {};
+        var unknownStatuses = {};
         items.forEach(function (item) {
             (item.evses || []).forEach(function (evse) {
-                var s = evse.status || "(vacío)";
-                rawStatuses[s] = (rawStatuses[s] || 0) + 1;
+                var es = evse.status || "(vacío)";
+                rawEvseStatuses[es] = (rawEvseStatuses[es] || 0) + 1;
+                var upper = (evse.status || "").toUpperCase();
+                if (upper && !isEvseAvailable(upper) && !isEvseInUse(upper) &&
+                    ["RESERVED","OUTOFORDER","INOPERATIVE","BLOCKED","PLANNED","REMOVED"].indexOf(upper) === -1) {
+                    unknownStatuses[es] = (unknownStatuses[es] || 0) + 1;
+                }
+                (evse.connectors || []).forEach(function (c) {
+                    var cs = c.status || "(vacío)";
+                    rawConnStatuses[cs] = (rawConnStatuses[cs] || 0) + 1;
+                });
             });
         });
-        console.log("[ElectroChile] EVSE statuses de la API:", rawStatuses);
+        console.log("[ElectroChile] EVSE statuses:", rawEvseStatuses);
+        console.log("[ElectroChile] Connector statuses:", rawConnStatuses);
+        if (Object.keys(unknownStatuses).length > 0) {
+            console.warn("[ElectroChile] STATUSES NO RECONOCIDOS:", unknownStatuses);
+        }
 
         if (!silent) {
             state.allStations = items.map(normalizeStation);
@@ -576,10 +591,8 @@ function enrichStationsWithSocketStatus() {
     console.log("[ElectroChile] Estado enriquecido con Supabase (", siteGroups.length, "sitios cruzados)");
 }
 
-
-// Statuses that mean the charger is actively being used (OCPI whitelist)
-// Only explicitly known "in use" statuses — everything else that's not AVAILABLE is treated as unavailable
-var IN_USE_STATUSES = ["CHARGING", "FINISHING"];
+// Statuses that mean the charger is actively being used (OCPI + Spanish variants)
+var IN_USE_STATUSES = ["CHARGING", "FINISHING", "OCCUPIED", "OCUPADO", "CARGANDO"];
 
 function isEvseAvailable(status) {
     var s = (status || "").toUpperCase();
@@ -601,12 +614,24 @@ function normalizeStation(item) {
     (item.evses || []).forEach(function (evse) {
         evseCount++;
         var evseStatus = (evse.status || "").toUpperCase();
-        if (isEvseAvailable(evseStatus)) availableCount++;
-        else if (isEvseInUse(evseStatus)) inUseCount++;
-        // EVSE status is source of truth. Connectors inherit it.
+
+        // If EVSE has a known status, use it directly for counting
+        if (isEvseAvailable(evseStatus)) {
+            availableCount++;
+        } else if (isEvseInUse(evseStatus)) {
+            inUseCount++;
+        } else if (!evseStatus) {
+            // EVSE status is empty — fall back to best connector status for counting
+            var connStatuses = (evse.connectors || []).map(function (c) {
+                return (c.status || "").toUpperCase();
+            });
+            if (connStatuses.some(isEvseAvailable)) availableCount++;
+            else if (connStatuses.some(isEvseInUse)) inUseCount++;
+        }
+        // else: EVSE has an explicit non-available, non-inuse status (OUTOFORDER, etc.)
+
         (evse.connectors || []).forEach(function (c) {
-            // Always use EVSE status as the authoritative status for display.
-            // The connector-level status is often stale or inconsistent in EcoCarga data.
+            // Use EVSE status as authoritative. Fall back to connector status if EVSE is empty.
             var rawStatus = evseStatus || (c.status || "UNKNOWN").toUpperCase();
             connectors.push({
                 standard: c.standard || "Desconocido",
@@ -760,14 +785,14 @@ function statusCls(status) {
 function statusLabel(status) {
     var s = (status || "").toUpperCase();
     if (s === "AVAILABLE" || s === "DISPONIBLE") return "Disponible";
-    if (s === "CHARGING" || s === "FINISHING") return "En uso";
-    if (s === "RESERVED") return "Reservado";
+    if (s === "CHARGING" || s === "FINISHING" || s === "OCCUPIED" || s === "OCUPADO" || s === "CARGANDO") return "En uso";
+    if (s === "RESERVED" || s === "RESERVADO") return "Reservado";
     if (s === "OUTOFORDER") return "Fuera de servicio";
     if (s === "INOPERATIVE") return "Inoperativo";
-    if (s === "BLOCKED") return "Bloqueado";
+    if (s === "BLOCKED" || s === "BLOQUEADO") return "Bloqueado";
     if (s === "PLANNED") return "Planificado";
     if (s === "REMOVED") return "Removido";
-    // Unknown or any other status — show the raw value for debugging
+    // Unknown — show raw value for debugging
     return s || "Sin info";
 }
 
@@ -940,6 +965,16 @@ function renderResultsList(stations) {
         card.addEventListener("click", function () {
             var lat = parseFloat(this.dataset.lat), lng = parseFloat(this.dataset.lng), sid = parseInt(this.dataset.id, 10);
             if (!isNaN(lat) && !isNaN(lng)) {
+                // Debug: log station details on click
+                var station = state.stations.find(function (s) { return s.id === sid; });
+                if (station) {
+                    console.log("[ElectroChile] Estacion:", station.name, "| ID:", sid);
+                    console.log("[ElectroChile] Conectores:", station.connectors.map(function (c) {
+                        return c.standard + " (" + c.powerType + ") → " + c.status;
+                    }));
+                    console.log("[ElectroChile] Disponibles:", station.availableCount + "/" + station.evseCount,
+                        "| En uso:", station.inUseCount + "/" + station.evseCount);
+                }
                 state.map.setView([lat, lng], 16);
                 state.markerCluster.eachLayer(function (m) { if (m.stationId === sid) m.openPopup(); });
                 dom.sidebar.classList.remove("open");
