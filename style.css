@@ -459,10 +459,10 @@ body {
     color: white; font-size: 14px; font-weight: 700;
 }
 
-.marker-icon-fast { background: var(--warning); }
-.marker-icon-inuse { background: var(--warning); opacity: 0.85; }
-.marker-icon-nodata { background: var(--info); opacity: 0.8; }
-.marker-icon-unavailable { background: #6b7280; opacity: 0.7; }
+.marker-icon-fast { border-color: #fbbf24; box-shadow: 0 0 0 2px #fbbf24, 0 2px 8px rgba(0,0,0,0.3); }
+.marker-icon-inuse { background: var(--warning); }
+.marker-icon-nodata { background: #9ca3af; opacity: 0.85; }
+.marker-icon-unavailable { background: var(--danger); }
 
 .marker-user {
     width: 20px; height: 20px; background: #3b82f6;
