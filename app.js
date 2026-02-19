@@ -96,6 +96,7 @@ function cacheDom() {
     dom.plannerDestAC = document.getElementById("planner-dest-ac");
     dom.plannerBattery = document.getElementById("planner-battery");
     dom.plannerTerrain = document.getElementById("planner-terrain");
+    dom.plannerSoc = document.getElementById("planner-soc");
     dom.plannerRangeKm = document.getElementById("planner-range-km");
     dom.plannerRangeDetail = document.getElementById("planner-range-detail");
     dom.plannerGo = document.getElementById("planner-go");
@@ -863,6 +864,11 @@ function buildPopup(s) {
     }
     h += '<div class="popup-status-bar ' + barCls + '">' + barTxt + '</div>';
 
+    // Price (from Supabase)
+    if (s._supabaseMinPrice) {
+        h += '<div class="popup-price">$' + s._supabaseMinPrice + '/kWh</div>';
+    }
+
     // Badges
     if (s.is24h) h += '<span class="tag tag-24h">24/7</span> ';
 
@@ -889,8 +895,8 @@ function buildPopup(s) {
         h += '</div>';
         // Show Supabase last updated time
         if (s._supabaseLastUpdated) {
-            var d = new Date(s._supabaseLastUpdated);
-            h += '<div class="popup-meta">Estado actualizado: ' + d.toLocaleString("es-CL", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) + '</div>';
+            var ago = timeAgo(s._supabaseLastUpdated);
+            h += '<div class="popup-meta popup-updated">' + (ago || "") + '</div>';
         }
     } else {
         // Fallback: show EcoCarga connector data
@@ -910,7 +916,8 @@ function buildPopup(s) {
         });
         h += '</div>';
         if (s.lastUpdated) {
-            h += '<div class="popup-meta">Actualizado: ' + new Date(s.lastUpdated).toLocaleDateString("es-CL") + '</div>';
+            var ago = timeAgo(s.lastUpdated);
+            h += '<div class="popup-meta popup-updated">' + (ago || new Date(s.lastUpdated).toLocaleDateString("es-CL")) + '</div>';
         }
     }
 
@@ -967,10 +974,13 @@ function renderResultsList(stations) {
 
         var distHtml = "";
         if (s._distance != null) distHtml = '<span class="station-distance">' + s._distance.toFixed(1) + " km</span>";
+        var updatedAgo = timeAgo(s._supabaseLastUpdated || s.lastUpdated);
+        if (updatedAgo) distHtml += '<span class="station-updated">' + updatedAgo + '</span>';
 
         var tagsHtml = '<span class="tag ' + stCls + '">' + stTxt + '</span>';
         s.standards.forEach(function (st) { tagsHtml += '<span class="tag tag-connector">' + escapeHtml(st) + '</span>'; });
         if (s.maxPower > 0) tagsHtml += '<span class="tag tag-power">' + s.maxPower + ' kW</span>';
+        if (s._supabaseMinPrice) tagsHtml += '<span class="tag tag-price">$' + s._supabaseMinPrice + '/kWh</span>';
         if (s.is24h) tagsHtml += '<span class="tag tag-24h">24/7</span>';
 
         html += '<div class="station-card ' + cardCls + '" data-lat="' + s.lat + '" data-lng="' + s.lng + '" data-id="' + s.id + '">' +
@@ -1028,6 +1038,19 @@ function escapeAttr(s) {
     return escapeHtml(s).replace(/"/g, "&quot;");
 }
 
+function timeAgo(isoStr) {
+    if (!isoStr) return null;
+    var diff = Date.now() - new Date(isoStr).getTime();
+    if (diff < 0) return "justo ahora";
+    var mins = Math.floor(diff / 60000);
+    if (mins < 1) return "justo ahora";
+    if (mins < 60) return "hace " + mins + " min";
+    var hours = Math.floor(mins / 60);
+    if (hours < 24) return "hace " + hours + "h";
+    var days = Math.floor(hours / 24);
+    return "hace " + days + "d";
+}
+
 function showLoading(show, text) {
     dom.loading.classList.toggle("hidden", !show);
     if (text && dom.loadingText) dom.loadingText.textContent = text;
@@ -1040,6 +1063,7 @@ function showLoading(show, text) {
 function initPlannerEvents() {
     // Update range estimate on input change
     dom.plannerBattery.addEventListener("input", updateRangeEstimate);
+    dom.plannerSoc.addEventListener("input", updateRangeEstimate);
     dom.plannerTerrain.addEventListener("change", updateRangeEstimate);
 
     // Autocomplete for origin
@@ -1095,12 +1119,14 @@ function initPlannerEvents() {
 
 function updateRangeEstimate() {
     var battery = parseFloat(dom.plannerBattery.value) || 60;
+    var soc = parseFloat(dom.plannerSoc.value) || 80;
     var terrainKey = dom.plannerTerrain.value;
     var t = TERRAIN[terrainKey] || TERRAIN.moderate;
     var consumption = t.consumption;
-    var rangeKm = Math.round((battery / consumption) * 100);
+    var usableEnergy = battery * (soc / 100);
+    var rangeKm = Math.round((usableEnergy / consumption) * 100);
     dom.plannerRangeKm.textContent = "~" + rangeKm + " km";
-    dom.plannerRangeDetail.textContent = battery + " kWh \u00b7 " + t.label + " \u00b7 ~" + consumption + " kWh/100km";
+    dom.plannerRangeDetail.textContent = battery + " kWh al " + soc + "% \u00b7 " + t.label + " \u00b7 ~" + consumption + " kWh/100km";
 }
 
 // ---- Planner Autocomplete ----
@@ -1225,9 +1251,10 @@ function doRoutePlan() {
             var durationMin = Math.round(route.duration / 60);
             var routeCoords = route.geometry.coordinates; // [lng, lat]
 
-            // Estimate range
+            // Estimate range based on current SoC
             var consumption = t.consumption;
-            var rangeKm = (battery / consumption) * 100;
+            var soc0 = parseFloat(dom.plannerSoc.value) || 80;
+            var rangeKm = (battery * (soc0 / 100) / consumption) * 100;
 
             // Draw route
             clearRoute();
@@ -1237,10 +1264,28 @@ function doRoutePlan() {
             var routeStations = findStationsAlongRoute(routeCoords, ROUTE_CORRIDOR_KM);
 
             // Select recommended stops based on range
+            var soc = parseFloat(dom.plannerSoc.value) || 80;
             var stops = selectChargingStops(routeStations, routeCoords, rangeKm, distKm);
 
+            // Calculate battery % at each stop and destination
+            var consumptionPerKm = t.consumption / 100;
+            var currentEnergy = battery * (soc / 100);
+            var prevKm = 0;
+            stops.forEach(function (stop) {
+                var segKm = stop.kmAlongRoute - prevKm;
+                currentEnergy -= segKm * consumptionPerKm;
+                stop._arrivalPct = Math.round(Math.max(0, (currentEnergy / battery) * 100));
+                if (!stop.isOptional) {
+                    currentEnergy = battery * 0.8; // fast charge to 80%
+                }
+                prevKm = stop.kmAlongRoute;
+            });
+            var finalKm = distKm - prevKm;
+            currentEnergy -= finalKm * consumptionPerKm;
+            var destArrivalPct = Math.round(Math.max(0, (currentEnergy / battery) * 100));
+
             // Render results
-            renderPlannerResults(distKm, durationMin, rangeKm, battery, t, stops);
+            renderPlannerResults(distKm, durationMin, rangeKm, battery, t, stops, destArrivalPct, soc);
 
             // Add stop markers on map
             addStopMarkers(stops);
@@ -1393,13 +1438,21 @@ function selectChargingStops(routeStations, routeCoords, rangeKm, totalDistKm) {
 
 // ---- Render planner results ----
 
-function renderPlannerResults(distKm, durationMin, rangeKm, battery, terrain, stops) {
+function batteryGaugeHtml(pct) {
+    var cls = pct > 30 ? "battery-ok" : pct > 15 ? "battery-low" : "battery-critical";
+    return '<span class="battery-gauge ' + cls + '">' +
+        '<span class="battery-bar" style="width:' + Math.max(4, pct) + '%"></span>' +
+        '</span> ' + pct + '%';
+}
+
+function renderPlannerResults(distKm, durationMin, rangeKm, battery, terrain, stops, destArrivalPct, soc) {
     var hours = Math.floor(durationMin / 60);
     var mins = durationMin % 60;
     var timeStr = hours > 0 ? hours + "h " + mins + "min" : mins + " min";
 
     var needsCharge = distKm > rangeKm * 0.8;
     var rangeClass = !needsCharge ? "val-success" : distKm > rangeKm ? "val-danger" : "val-warning";
+    var arrivalClass = destArrivalPct > 30 ? "val-success" : destArrivalPct > 15 ? "val-warning" : "val-danger";
 
     var summaryHtml = '<div class="planner-summary-row">' +
         '<span class="planner-summary-label">Distancia total</span>' +
@@ -1413,6 +1466,9 @@ function renderPlannerResults(distKm, durationMin, rangeKm, battery, terrain, st
     summaryHtml += '<div class="planner-summary-row">' +
         '<span class="planner-summary-label">Consumo estimado</span>' +
         '<span class="planner-summary-value">' + (distKm * terrain.consumption / 100).toFixed(1) + ' kWh (' + terrain.consumption + ' kWh/100km)</span></div>';
+    summaryHtml += '<div class="planner-summary-row">' +
+        '<span class="planner-summary-label">Bater\u00eda al llegar</span>' +
+        '<span class="planner-summary-value ' + arrivalClass + '">' + batteryGaugeHtml(destArrivalPct) + '</span></div>';
 
     if (stops.length > 0 && !stops[0].isOptional) {
         summaryHtml += '<div class="planner-summary-row">' +
@@ -1439,13 +1495,21 @@ function renderPlannerResults(distKm, durationMin, rangeKm, battery, terrain, st
             else tagsHtml += '<span class="tag tag-type">AC Lenta</span>';
             s.standards.forEach(function (st) { tagsHtml += '<span class="tag tag-connector">' + escapeHtml(st) + '</span>'; });
             if (s.maxPower > 0) tagsHtml += '<span class="tag tag-power">' + s.maxPower + ' kW</span>';
+            if (s._supabaseMinPrice) tagsHtml += '<span class="tag tag-price">$' + s._supabaseMinPrice + '/kWh</span>';
             if (s.hasAvailable) tagsHtml += '<span class="tag tag-status-available">Disponible</span>';
             else tagsHtml += '<span class="tag tag-status-unavailable">No disponible</span>';
             if (stop.isOptional) tagsHtml += '<span class="tag tag-24h">Opcional</span>';
 
+            // Battery % arrival
+            var batteryHtml = "";
+            if (stop._arrivalPct != null) {
+                batteryHtml = '<div class="stop-battery">Llegas con ' + batteryGaugeHtml(stop._arrivalPct) + '</div>';
+            }
+
             stopsHtml += '<div class="station-card ' + cardCls + ' stop-card" data-lat="' + s.lat + '" data-lng="' + s.lng + '">' +
                 '<span class="stop-number">' + (i + 1) + '</span>' +
                 '<div class="stop-km">Km ' + Math.round(stop.kmAlongRoute) + ' de la ruta \u00b7 ' + stop.distToRoute.toFixed(1) + ' km del camino</div>' +
+                batteryHtml +
                 '<div class="stop-name">' + escapeHtml(s.name) + '</div>' +
                 '<div class="stop-address">' + escapeHtml([s.address, s.commune].filter(Boolean).join(", ")) + '</div>' +
                 '<div class="stop-tags">' + tagsHtml + '</div></div>';

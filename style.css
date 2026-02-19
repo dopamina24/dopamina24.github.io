@@ -234,6 +234,11 @@ body {
     font-size: 0.75rem; color: var(--primary); font-weight: 600; white-space: nowrap;
 }
 
+.station-updated {
+    font-size: 0.68rem; color: var(--text-muted); font-weight: 400;
+    margin-left: 4px; white-space: nowrap;
+}
+
 .station-address { font-size: 0.75rem; color: var(--text-muted); margin-bottom: 4px; }
 
 .station-owner { font-size: 0.7rem; color: var(--text-secondary); margin-bottom: 8px; }
@@ -289,6 +294,7 @@ body {
 .tag-status-nodata { background: rgba(59,130,246,0.15); color: var(--info); }
 .tag-status-unavailable { background: rgba(239,68,68,0.15); color: var(--danger); }
 .tag-24h { background: rgba(59,130,246,0.15); color: var(--info); }
+.tag-price { background: rgba(16,185,129,0.15); color: var(--success); font-weight: 600; }
 
 /* Provider badges (dondecargo.cl integration) */
 .tag-provider { font-weight: 600; font-size: 0.68rem; letter-spacing: 0.02em; }
@@ -447,6 +453,33 @@ body {
 
 .planner-clear:hover { border-color: var(--danger); color: var(--danger); }
 
+/* Battery gauge */
+.battery-gauge {
+    display: inline-block; width: 36px; height: 14px;
+    background: var(--bg-input); border: 1.5px solid var(--text-muted);
+    border-radius: 3px; vertical-align: middle; margin-right: 4px;
+    position: relative; overflow: hidden;
+}
+
+.battery-gauge::after {
+    content: ""; position: absolute; right: -4px; top: 3px;
+    width: 3px; height: 6px; background: var(--text-muted); border-radius: 0 1px 1px 0;
+}
+
+.battery-bar {
+    display: block; height: 100%; border-radius: 1px;
+    transition: width 0.3s;
+}
+
+.battery-ok .battery-bar { background: var(--success); }
+.battery-low .battery-bar { background: var(--warning); }
+.battery-critical .battery-bar { background: var(--danger); }
+
+.stop-battery {
+    font-size: 0.75rem; font-weight: 600; color: var(--text-secondary);
+    margin-bottom: 4px;
+}
+
 /* ---- Map ---- */
 #map { position: fixed; top: 0; left: var(--sidebar-width); right: 0; bottom: 0; z-index: 1; }
 
@@ -499,6 +532,11 @@ body {
 .popup-owner { font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 6px; }
 .popup-address { color: var(--text-secondary); font-size: 0.8rem; margin-bottom: 8px; }
 .popup-meta { font-size: 0.75rem; color: var(--text-muted); margin-bottom: 6px; }
+.popup-updated { font-style: italic; }
+.popup-price {
+    font-size: 0.85rem; font-weight: 700; color: var(--success);
+    margin-bottom: 6px;
+}
 
 /* Status bar in popup */
 .popup-status-bar {
