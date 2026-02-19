@@ -218,6 +218,7 @@ body {
 
 .station-card.card-available { border-left-color: var(--success); }
 .station-card.card-inuse { border-left-color: var(--warning); }
+.station-card.card-nodata { border-left-color: var(--info); }
 .station-card.card-unavailable { border-left-color: var(--danger); }
 
 .station-card-header {
@@ -260,6 +261,10 @@ body {
     background: rgba(245,158,11,0.15); border-color: var(--warning);
 }
 
+.card-conn-mini.cs-nodata {
+    background: rgba(59,130,246,0.12); border-color: var(--info);
+}
+
 .card-conn-mini .conn-svg {
     width: 16px; height: 16px;
 }
@@ -267,6 +272,7 @@ body {
 .card-conn-mini.cs-available .conn-svg { fill: var(--success); stroke: var(--success); }
 .card-conn-mini.cs-unavailable .conn-svg { fill: var(--danger); stroke: var(--danger); }
 .card-conn-mini.cs-inuse .conn-svg { fill: var(--warning); stroke: var(--warning); }
+.card-conn-mini.cs-nodata .conn-svg { fill: var(--info); stroke: var(--info); }
 
 .station-tags { display: flex; flex-wrap: wrap; gap: 4px; }
 
@@ -280,6 +286,7 @@ body {
 .tag-power { background: rgba(245,158,11,0.15); color: var(--warning); }
 .tag-status-available { background: rgba(16,185,129,0.15); color: var(--success); }
 .tag-status-inuse { background: rgba(245,158,11,0.15); color: var(--warning); }
+.tag-status-nodata { background: rgba(59,130,246,0.15); color: var(--info); }
 .tag-status-unavailable { background: rgba(239,68,68,0.15); color: var(--danger); }
 .tag-24h { background: rgba(59,130,246,0.15); color: var(--info); }
 
@@ -454,6 +461,7 @@ body {
 
 .marker-icon-fast { background: var(--warning); }
 .marker-icon-inuse { background: var(--warning); opacity: 0.85; }
+.marker-icon-nodata { background: var(--info); opacity: 0.8; }
 .marker-icon-unavailable { background: #6b7280; opacity: 0.7; }
 
 .marker-user {
@@ -508,6 +516,11 @@ body {
     border: 1px solid rgba(245,158,11,0.25);
 }
 
+.popup-status-bar.bar-nodata {
+    background: rgba(59,130,246,0.12); color: var(--info);
+    border: 1px solid rgba(59,130,246,0.25);
+}
+
 .popup-status-bar.bar-unavailable {
     background: rgba(239,68,68,0.12); color: var(--danger);
     border: 1px solid rgba(239,68,68,0.25);
@@ -529,6 +542,7 @@ body {
 .popup-conn.cs-available { background: rgba(16,185,129,0.08); border-color: rgba(16,185,129,0.25); }
 .popup-conn.cs-unavailable { background: rgba(239,68,68,0.06); border-color: rgba(239,68,68,0.2); }
 .popup-conn.cs-inuse { background: rgba(245,158,11,0.08); border-color: rgba(245,158,11,0.25); }
+.popup-conn.cs-nodata { background: rgba(59,130,246,0.06); border-color: rgba(59,130,246,0.2); }
 
 .popup-conn-icon {
     flex-shrink: 0; width: 28px; height: 28px;
@@ -540,6 +554,7 @@ body {
 .popup-conn.cs-available .conn-svg { fill: var(--success); stroke: var(--success); }
 .popup-conn.cs-unavailable .conn-svg { fill: var(--danger); stroke: var(--danger); }
 .popup-conn.cs-inuse .conn-svg { fill: var(--warning); stroke: var(--warning); }
+.popup-conn.cs-nodata .conn-svg { fill: var(--info); stroke: var(--info); }
 
 .popup-conn-detail { flex: 1; min-width: 0; }
 .popup-conn-type { font-size: 0.78rem; font-weight: 600; color: var(--text-primary); }
@@ -554,6 +569,7 @@ body {
 .popup-conn-badge.cs-available { background: rgba(16,185,129,0.2); color: var(--success); }
 .popup-conn-badge.cs-unavailable { background: rgba(239,68,68,0.15); color: var(--danger); }
 .popup-conn-badge.cs-inuse { background: rgba(245,158,11,0.2); color: var(--warning); }
+.popup-conn-badge.cs-nodata { background: rgba(59,130,246,0.15); color: var(--info); }
 
 /* Status dot */
 .status-dot {

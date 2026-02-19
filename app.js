@@ -594,6 +594,9 @@ function enrichStationsWithSocketStatus() {
 // Statuses that mean the charger is actively being used (OCPI + Spanish variants)
 var IN_USE_STATUSES = ["CHARGING", "FINISHING", "OCCUPIED", "OCUPADO", "CARGANDO"];
 
+// Status from /locations API that means "no real-time data" (not actually unavailable)
+var NO_DATA_STATUSES = ["NO DISPONIBLE", "NO_DISPONIBLE", "UNKNOWN"];
+
 function isEvseAvailable(status) {
     var s = (status || "").toUpperCase();
     return s === "AVAILABLE" || s === "DISPONIBLE";
@@ -604,34 +607,40 @@ function isEvseInUse(status) {
     return IN_USE_STATUSES.indexOf(s) !== -1;
 }
 
+function isEvseNoData(status) {
+    var s = (status || "").toUpperCase();
+    return !s || NO_DATA_STATUSES.indexOf(s) !== -1;
+}
+
 function normalizeStation(item) {
     var connectors = [];
     var maxPower = 0;
     var evseCount = 0;
     var availableCount = 0;
     var inUseCount = 0;
+    var noDataCount = 0;
 
     (item.evses || []).forEach(function (evse) {
         evseCount++;
         var evseStatus = (evse.status || "").toUpperCase();
 
-        // If EVSE has a known status, use it directly for counting
         if (isEvseAvailable(evseStatus)) {
             availableCount++;
         } else if (isEvseInUse(evseStatus)) {
             inUseCount++;
-        } else if (!evseStatus) {
-            // EVSE status is empty — fall back to best connector status for counting
+        } else if (isEvseNoData(evseStatus)) {
+            // "NO DISPONIBLE" or empty — the /locations API doesn't provide real-time status.
+            // Fall back to connector status if available, otherwise count as no-data.
             var connStatuses = (evse.connectors || []).map(function (c) {
                 return (c.status || "").toUpperCase();
             });
             if (connStatuses.some(isEvseAvailable)) availableCount++;
             else if (connStatuses.some(isEvseInUse)) inUseCount++;
+            else noDataCount++;
         }
-        // else: EVSE has an explicit non-available, non-inuse status (OUTOFORDER, etc.)
+        // else: EVSE has an explicit unavailable status (OUTOFORDER, INOPERATIVE, etc.)
 
         (evse.connectors || []).forEach(function (c) {
-            // Use EVSE status as authoritative. Fall back to connector status if EVSE is empty.
             var rawStatus = evseStatus || (c.status || "UNKNOWN").toUpperCase();
             connectors.push({
                 standard: c.standard || "Desconocido",
@@ -646,6 +655,8 @@ function normalizeStation(item) {
 
     var stds = {}, ptypes = {};
     connectors.forEach(function (c) { stds[c.standard] = true; ptypes[c.powerType] = true; });
+
+    var allNoData = noDataCount === evseCount && evseCount > 0;
 
     return {
         id: item.location_id,
@@ -662,8 +673,10 @@ function normalizeStation(item) {
         evseCount: evseCount,
         availableCount: availableCount,
         inUseCount: inUseCount,
+        noDataCount: noDataCount,
         hasAvailable: availableCount > 0,
         hasInUse: inUseCount > 0,
+        allNoData: allNoData,
         is24h: item.opening_times && item.opening_times.twentyfourseven,
         owner: item.owner ? item.owner.name : "Desconocido",
         lastUpdated: item.last_updated,
@@ -779,6 +792,7 @@ function statusCls(status) {
     var s = (status || "").toUpperCase();
     if (isEvseAvailable(s)) return "cs-available";
     if (isEvseInUse(s)) return "cs-inuse";
+    if (isEvseNoData(s)) return "cs-nodata";
     return "cs-unavailable";
 }
 
@@ -786,13 +800,13 @@ function statusLabel(status) {
     var s = (status || "").toUpperCase();
     if (s === "AVAILABLE" || s === "DISPONIBLE") return "Disponible";
     if (s === "CHARGING" || s === "FINISHING" || s === "OCCUPIED" || s === "OCUPADO" || s === "CARGANDO") return "En uso";
+    if (isEvseNoData(s)) return "Sin estado";
     if (s === "RESERVED" || s === "RESERVADO") return "Reservado";
     if (s === "OUTOFORDER") return "Fuera de servicio";
     if (s === "INOPERATIVE") return "Inoperativo";
     if (s === "BLOCKED" || s === "BLOQUEADO") return "Bloqueado";
     if (s === "PLANNED") return "Planificado";
     if (s === "REMOVED") return "Removido";
-    // Unknown — show raw value for debugging
     return s || "Sin info";
 }
 
@@ -807,8 +821,10 @@ function renderMarkers(stations) {
         var isDC = s.powerTypes.indexOf("DC") !== -1;
         var cls = "marker-icon";
         if (isDC) cls += " marker-icon-fast";
-        if (!s.hasAvailable && s.hasInUse) cls += " marker-icon-inuse";
-        else if (!s.hasAvailable) cls += " marker-icon-unavailable";
+        if (s.hasAvailable) { /* default green */ }
+        else if (s.hasInUse) cls += " marker-icon-inuse";
+        else if (s.allNoData) cls += " marker-icon-nodata";
+        else cls += " marker-icon-unavailable";
         var icon = L.divIcon({ html: '<div class="' + cls + '">&#9889;</div>', className: "", iconSize: [32, 32], iconAnchor: [16, 16] });
         var m = L.marker([s.lat, s.lng], { icon: icon });
         m.bindPopup(buildPopup(s), { maxWidth: 340 });
@@ -838,6 +854,9 @@ function buildPopup(s) {
     } else if (s.hasInUse) {
         barCls = "bar-inuse";
         barTxt = s.inUseCount + "/" + s.evseCount + " en uso";
+    } else if (s.allNoData) {
+        barCls = "bar-nodata";
+        barTxt = s.evseCount + " cargadores \u00B7 sin estado en tiempo real";
     } else {
         barCls = "bar-unavailable";
         barTxt = "Ninguno disponible";
@@ -920,7 +939,7 @@ function renderResultsList(stations) {
 
     var html = "";
     stations.slice(0, 60).forEach(function (s) {
-        var cardCls = s.hasAvailable ? "card-available" : (s.hasInUse ? "card-inuse" : "card-unavailable");
+        var cardCls = s.hasAvailable ? "card-available" : (s.hasInUse ? "card-inuse" : (s.allNoData ? "card-nodata" : "card-unavailable"));
 
         // Status tag
         var stCls, stTxt;
@@ -930,6 +949,9 @@ function renderResultsList(stations) {
         } else if (s.hasInUse) {
             stCls = "tag-status-inuse";
             stTxt = s.inUseCount + "/" + s.evseCount + " En uso";
+        } else if (s.allNoData) {
+            stCls = "tag-status-nodata";
+            stTxt = s.evseCount + " cargadores";
         } else {
             stCls = "tag-status-unavailable";
             stTxt = "No disponible";
