@@ -116,10 +116,9 @@ function init() {
     initMap();
     initEvents();
     initPlannerEvents();
-    loadAllStations();
     updateRangeEstimate();
-    startStatusPolling();
-    // Load Supabase real-time data in parallel (non-blocking)
+    // DondeCargo.cl (Supabase) as primary data source
+    showLoading(true, "Conectando con DondeCargo.cl...");
     fetchSupabaseSockets();
 }
 
@@ -459,13 +458,8 @@ function fetchAllFromAPI(silent) {
 function startStatusPolling() {
     if (_pollTimer) clearInterval(_pollTimer);
     _pollTimer = setInterval(function () {
-        // Only poll if the page is visible to avoid wasting requests
         if (document.hidden) return;
-        console.log("[ElectroChile] Actualizando estado de estaciones...");
-        // Invalidate cache so next fetchAllFromAPI gets fresh data
-        try { localStorage.removeItem(CACHE_KEY); } catch (e) { }
-        fetchAllFromAPI(true);
-        // Also refresh Supabase socket statuses
+        console.log("[ElectroChile] Actualizando estado desde DondeCargo.cl...");
         fetchSupabaseSockets();
     }, STATUS_POLL_INTERVAL);
     console.log("[ElectroChile] Polling de estado iniciado (cada 5 min)");
@@ -507,11 +501,105 @@ function fetchSupabaseSockets() {
         state.supabaseSockets = Array.isArray(results[0]) ? results[0] : [];
         state.supabaseStations = Array.isArray(results[1]) ? results[1] : [];
         console.log("[ElectroChile] Supabase: " + state.supabaseSockets.length + " sockets, " + state.supabaseStations.length + " stations");
-        // Enrich EcoCarga stations with real-time status
-        enrichStationsWithSocketStatus();
+        // Build stations directly from Supabase (DondeCargo.cl)
+        buildStationsFromSupabase();
+        showLoading(false);
     }).catch(function (err) {
         console.warn("[ElectroChile] Supabase no disponible:", err.message);
+        showLoading(false);
     });
+}
+
+var PROVIDER_LABELS = { "COPEC": "Copec Voltex", "ENELX": "Enel X", "EVX": "EVX" };
+
+function buildStationsFromSupabase() {
+    var siteGroups = buildSocketsBySiteMap();
+    var stations = [];
+
+    siteGroups.forEach(function (group) {
+        var st = group.station;
+        var sockets = group.sockets;
+        if (!st.latitude || !st.longitude) return;
+
+        var availCount = 0, inUseCount = 0, noDataCount = 0;
+        var maxPower = st.power_kw || 0;
+
+        sockets.forEach(function (sk) {
+            var s = (sk.status || "").toUpperCase();
+            if (s === "AVAILABLE" || s === "DISPONIBLE") availCount++;
+            else if (isEvseInUse(s)) inUseCount++;
+            else noDataCount++;
+            if (sk.power && sk.power > maxPower) maxPower = sk.power;
+        });
+
+        // Parse connector types
+        var standards = [];
+        if (st.connector_types) {
+            var raw = typeof st.connector_types === "string"
+                ? st.connector_types.split(",") : st.connector_types;
+            raw.forEach(function (t) {
+                var trimmed = t.trim();
+                if (trimmed && standards.indexOf(trimmed) === -1) standards.push(trimmed);
+            });
+        }
+        if (!standards.length) standards.push(st.is_fast ? "CCS 2" : "Tipo 2");
+
+        var powerTypes = st.is_fast ? ["DC"] : ["AC"];
+
+        var lastUpdated = sockets.reduce(function (latest, sk) {
+            return (!latest || sk.last_upserted_at > latest) ? sk.last_upserted_at : latest;
+        }, null);
+
+        var connectors = sockets.map(function (sk) {
+            return {
+                standard: standards[0],
+                powerType: st.is_fast ? "DC" : "AC",
+                maxPower: sk.power || maxPower,
+                format: "",
+                status: sk.status || "UNKNOWN"
+            };
+        });
+
+        stations.push({
+            id: st.station_id || String(st.id),
+            name: st.name || (PROVIDER_LABELS[st.provider_id] || "Estación"),
+            address: (sockets[0] && sockets[0].address) || "",
+            commune: (sockets[0] && sockets[0].city) || "",
+            region: "",
+            lat: st.latitude,
+            lng: st.longitude,
+            connectors: connectors,
+            standards: standards,
+            powerTypes: powerTypes,
+            maxPower: maxPower,
+            evseCount: sockets.length,
+            availableCount: availCount,
+            inUseCount: inUseCount,
+            noDataCount: noDataCount,
+            hasAvailable: availCount > 0,
+            hasInUse: inUseCount > 0,
+            allNoData: availCount === 0 && inUseCount === 0 && noDataCount === sockets.length,
+            is24h: st.accessibility === "24/7" || st.accessibility === "24h" || false,
+            owner: PROVIDER_LABELS[st.provider_id] || st.provider_id || "Desconocido",
+            lastUpdated: lastUpdated,
+            _supabaseSockets: sockets,
+            _supabaseProvider: st.provider_id,
+            _supabaseMinPrice: st.min_price || (sockets[0] && sockets[0].price),
+            _supabaseLastUpdated: lastUpdated
+        });
+    });
+
+    state.allStations = stations;
+    state.stations = stations;
+    buildOwnerOptions();
+    buildCommuneIndex();
+    applyFilters();
+    dom.dataInfo.textContent = stations.length + " estaciones \u00b7 DondeCargo.cl (tiempo real)";
+    console.log("[ElectroChile] " + stations.length + " estaciones construidas desde Supabase");
+
+    // Start polling for real-time updates
+    startStatusPolling();
+    tryGeolocation();
 }
 
 // Distance between two lat/lng in meters (Haversine)
