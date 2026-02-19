@@ -283,6 +283,12 @@ body {
 .tag-status-unavailable { background: rgba(239,68,68,0.15); color: var(--danger); }
 .tag-24h { background: rgba(59,130,246,0.15); color: var(--info); }
 
+/* Provider badges (dondecargo.cl integration) */
+.tag-provider { font-weight: 600; font-size: 0.68rem; letter-spacing: 0.02em; }
+.tag-copec  { background: rgba(220,38,38,0.15); color: #f87171; }
+.tag-enelx  { background: rgba(16,185,129,0.15); color: var(--success); }
+.tag-evx    { background: rgba(139,92,246,0.18); color: #a78bfa; }
+
 .tag-type {
     background: rgba(100,116,139,0.15); color: var(--text-secondary);
     max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;

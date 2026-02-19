@@ -10,14 +10,23 @@ var NOMINATIM_BASE = "https://nominatim.openstreetmap.org/search";
 var OSRM_BASE = "https://router.project-osrm.org/route/v1/driving";
 var CHILE_CENTER = [-33.45, -70.65];
 var PAGE_SIZE = 500;
+
+// ---- dondecargo.cl Supabase API (public anon token) ----
+var SUPABASE_URL = "https://cmyyoslcmkxgnyswnqoy.supabase.co/rest/v1";
+var SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNteXlvc2xjbWt4Z255c3ducW95Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQ5NjI0NzAsImV4cCI6MjA4MDUzODQ3MH0.bv88yKYKyH06lxTOp_o5Oq_mgXS2xrNHTBrlsZ4ADuk";
+var SUPABASE_MATCH_RADIUS_M = 80; // meters to match sockets to EcoCarga stations
+
 var CACHE_KEY = "electrochile_stations";
-var CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+var CACHE_TTL = 2 * 60 * 60 * 1000; // 2 hours (same as EcoCarga app)
+var STATUS_POLL_INTERVAL = 5 * 60 * 1000; // 5 minutes polling (same as EcoCarga app)
+var _pollTimer = null;
+var _lastRefresh = null;
 
 // Terrain consumption multipliers (kWh/100km base ~15)
 var TERRAIN = {
-    flat:     { factor: 1.0,  label: "Plano",   consumption: 15 },
-    moderate: { factor: 1.15, label: "Colinas",  consumption: 17 },
-    mountain: { factor: 1.4,  label: "Montaña",  consumption: 21 }
+    flat: { factor: 1.0, label: "Plano", consumption: 15 },
+    moderate: { factor: 1.15, label: "Colinas", consumption: 17 },
+    mountain: { factor: 1.4, label: "Montaña", consumption: 21 }
 };
 
 // How close to route a station must be (km)
@@ -48,7 +57,10 @@ var state = {
     originMarker: null,
     destMarker: null,
     plannerOrigin: null, // { lat, lng, name }
-    plannerDest: null
+    plannerDest: null,
+    // dondecargo.cl real-time socket data
+    supabaseSockets: [],     // raw socket rows from Supabase
+    supabaseStations: []     // raw station rows from Supabase
 };
 
 // ---- DOM ----
@@ -105,6 +117,9 @@ function init() {
     initPlannerEvents();
     loadAllStations();
     updateRangeEstimate();
+    startStatusPolling();
+    // Load Supabase real-time data in parallel (non-blocking)
+    fetchSupabaseSockets();
 }
 
 function initMap() {
@@ -396,11 +411,20 @@ function fetchAllFromAPI(silent) {
             dom.dataInfo.textContent = state.allStations.length + " estaciones | EcoCarga";
             tryGeolocation();
         } else {
+            // Silent background refresh — update markers without disrupting user
+            var hadFilters = (state.userLocation !== null ||
+                dom.statusFilter.value !== "all" ||
+                dom.ownerFilter.value !== "all");
             state.allStations = items.map(normalizeStation);
             state.stations = state.allStations.slice();
             buildCommuneIndex();
             buildOwnerOptions();
-            dom.dataInfo.textContent = state.allStations.length + " estaciones | EcoCarga";
+            _lastRefresh = new Date();
+            var timeStr = _lastRefresh.toLocaleTimeString("es-CL", { hour: "2-digit", minute: "2-digit" });
+            dom.dataInfo.textContent = state.allStations.length + " estaciones | Actualizado " + timeStr;
+            // Re-apply current filters to refresh markers
+            applyFilters();
+            console.log("[ElectroChile] Estado actualizado: " + items.length + " estaciones a las " + timeStr);
         }
     }).catch(function (err) {
         console.error("Error:", err);
@@ -409,6 +433,26 @@ function fetchAllFromAPI(silent) {
             dom.resultsList.innerHTML = '<div class="empty-state"><p>Error al conectar con EcoCarga.</p></div>';
         }
     });
+}
+
+// ============================================
+// Real-time Status Polling (every 5 min)
+// Replicates EcoCarga app polling behavior
+// ============================================
+
+function startStatusPolling() {
+    if (_pollTimer) clearInterval(_pollTimer);
+    _pollTimer = setInterval(function () {
+        // Only poll if the page is visible to avoid wasting requests
+        if (document.hidden) return;
+        console.log("[ElectroChile] Actualizando estado de estaciones...");
+        // Invalidate cache so next fetchAllFromAPI gets fresh data
+        try { localStorage.removeItem(CACHE_KEY); } catch (e) { }
+        fetchAllFromAPI(true);
+        // Also refresh Supabase socket statuses
+        fetchSupabaseSockets();
+    }, STATUS_POLL_INTERVAL);
+    console.log("[ElectroChile] Polling de estado iniciado (cada 5 min)");
 }
 
 function getCachedStations() {
@@ -425,6 +469,113 @@ function fetchPage(page) {
     return fetch(ECOCARGA_API + "?page=" + page + "&items_per_page=" + PAGE_SIZE)
         .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); });
 }
+
+// ============================================
+// dondecargo.cl Supabase Integration
+// Real-time socket status for all providers
+// (Copec Voltex, Enel X, EVX, etc.)
+// ============================================
+
+function fetchSupabaseSockets() {
+    var headers = { "apikey": SUPABASE_KEY, "Authorization": "Bearer " + SUPABASE_KEY };
+
+    // Fetch sockets (connector-level real-time status)
+    var socketsUrl = SUPABASE_URL + "/sockets?select=socket_id,site_id,address,city,status,speed,power,price,maintenance,last_upserted_at,copec_id,evx_charge_point_id";
+    // Fetch stations (station-level info with coordinates per provider)
+    var stationsUrl = SUPABASE_URL + "/stations?select=id,name,latitude,longitude,station_id,provider_id,status,power_kw,is_fast,connector_types,min_price,accessibility&limit=2000";
+
+    return Promise.all([
+        fetch(socketsUrl, { headers: headers }).then(function (r) { return r.json(); }),
+        fetch(stationsUrl, { headers: headers }).then(function (r) { return r.json(); })
+    ]).then(function (results) {
+        state.supabaseSockets = Array.isArray(results[0]) ? results[0] : [];
+        state.supabaseStations = Array.isArray(results[1]) ? results[1] : [];
+        console.log("[ElectroChile] Supabase: " + state.supabaseSockets.length + " sockets, " + state.supabaseStations.length + " stations");
+        // Enrich EcoCarga stations with real-time status
+        enrichStationsWithSocketStatus();
+    }).catch(function (err) {
+        console.warn("[ElectroChile] Supabase no disponible:", err.message);
+    });
+}
+
+// Distance between two lat/lng in meters (Haversine)
+function haversineMeters(lat1, lng1, lat2, lng2) {
+    var R = 6371000;
+    var dLat = (lat2 - lat1) * Math.PI / 180;
+    var dLng = (lng2 - lng1) * Math.PI / 180;
+    var a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+        Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+        Math.sin(dLng / 2) * Math.sin(dLng / 2);
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+// Build a lookup: supabase station lat/lng → sockets belonging to that site
+function buildSocketsBySiteMap() {
+    var byStation = {}; // supabase station.id → [sockets]
+    // First, map site_id → supabase station
+    var siteToStation = {};
+    state.supabaseStations.forEach(function (st) {
+        siteToStation[st.station_id] = st;
+    });
+    state.supabaseSockets.forEach(function (sk) {
+        var st = siteToStation[sk.site_id];
+        if (st) {
+            if (!byStation[st.id]) byStation[st.id] = { station: st, sockets: [] };
+            byStation[st.id].sockets.push(sk);
+        }
+    });
+    return Object.values(byStation);
+}
+
+function enrichStationsWithSocketStatus() {
+    if (!state.supabaseStations.length) return;
+
+    var siteGroups = buildSocketsBySiteMap();
+
+    // For each EcoCarga station, find nearby Supabase site and apply socket statuses
+    state.allStations.forEach(function (ecStation) {
+        var bestGroup = null;
+        var bestDist = SUPABASE_MATCH_RADIUS_M;
+
+        siteGroups.forEach(function (group) {
+            var d = haversineMeters(ecStation.lat, ecStation.lng, group.station.latitude, group.station.longitude);
+            if (d < bestDist) {
+                bestDist = d;
+                bestGroup = group;
+            }
+        });
+
+        if (bestGroup) {
+            var sockets = bestGroup.sockets;
+            var st = bestGroup.station;
+            // Apply socket-level statuses to override EVSE statuses in EcoCarga
+            var availCount = 0, inUseCount = 0, unavailCount = 0;
+            sockets.forEach(function (sk) {
+                var s = (sk.status || "").toUpperCase();
+                if (s === "AVAILABLE") availCount++;
+                else if (s === "OCCUPIED" || s === "CHARGING") inUseCount++;
+                else unavailCount++;
+            });
+            // Override station status
+            ecStation.hasAvailable = availCount > 0;
+            ecStation.hasInUse = inUseCount > 0;
+            ecStation.availableCount = availCount;
+            ecStation.inUseCount = inUseCount;
+            ecStation.evseCount = sockets.length || ecStation.evseCount;
+            ecStation._supabaseSockets = sockets;
+            ecStation._supabaseProvider = st.provider_id;
+            ecStation._supabaseMinPrice = st.min_price || (sockets[0] && sockets[0].price);
+            ecStation._supabaseLastUpdated = sockets.reduce(function (latest, sk) {
+                return (!latest || sk.last_upserted_at > latest) ? sk.last_upserted_at : latest;
+            }, null);
+        }
+    });
+
+    // Re-render markers with updated statuses
+    applyFilters();
+    console.log("[ElectroChile] Estado enriquecido con Supabase (", siteGroups.length, "sitios cruzados)");
+}
+
 
 // Statuses that mean the charger is actively being used (OCPI whitelist)
 // Only explicitly known "in use" statuses — everything else that's not AVAILABLE is treated as unavailable
@@ -643,6 +794,12 @@ function renderMarkers(stations) {
 
 function buildPopup(s) {
     var h = '<div class="popup-title">' + escapeHtml(s.name) + '</div>';
+    // Provider badge (from Supabase)
+    if (s._supabaseProvider) {
+        var providerLabels = { "COPEC": "Copec Voltex", "ENELX": "Enel X", "EVX": "EVX" };
+        var pLabel = providerLabels[s._supabaseProvider] || s._supabaseProvider;
+        h += '<span class="tag tag-provider tag-' + s._supabaseProvider.toLowerCase() + '">' + pLabel + '</span> ';
+    }
     h += '<div class="popup-owner">' + escapeHtml(s.owner) + '</div>';
     h += '<div class="popup-address">' + escapeHtml([s.address, s.commune, s.region].filter(Boolean).join(", ")) + '</div>';
 
@@ -665,28 +822,56 @@ function buildPopup(s) {
     // Badges
     if (s.is24h) h += '<span class="tag tag-24h">24/7</span> ';
 
-    // Individual connectors with icons
-    h += '<div class="popup-conn-grid">';
-    s.connectors.forEach(function (c) {
-        var sc = statusCls(c.status);
-        var sl = statusLabel(c.status);
-        var pw = c.maxPower ? c.maxPower + " kW" : "";
-        h += '<div class="popup-conn ' + sc + '">' +
-            '<div class="popup-conn-icon">' + connIcon(c.standard) + '</div>' +
-            '<div class="popup-conn-detail">' +
-            '<div class="popup-conn-type">' + escapeHtml(c.standard) + ' <small>' + c.powerType + '</small></div>' +
-            (pw ? '<div class="popup-conn-power">' + pw + '</div>' : '') +
-            '</div>' +
-            '<div class="popup-conn-badge ' + sc + '">' + sl + '</div>' +
-            '</div>';
-    });
-    h += '</div>';
-
-    if (s.lastUpdated) {
-        h += '<div class="popup-meta">Actualizado: ' + new Date(s.lastUpdated).toLocaleDateString("es-CL") + '</div>';
+    // If we have Supabase socket-level data, show it
+    if (s._supabaseSockets && s._supabaseSockets.length) {
+        h += '<div class="popup-conn-grid">';
+        s._supabaseSockets.forEach(function (sk) {
+            var skStatus = (sk.status || "UNKNOWN").toUpperCase();
+            var sc = statusCls(skStatus);
+            var sl = statusLabel(skStatus);
+            if (sk.maintenance) { sc = "cs-unavailable"; sl = "Mantención"; }
+            var speedLabel = { "SLOW": "Lento (AC)", "FAST": "Rápido (DC)", "ULTRA_FAST": "Ultra rápido", "MEDIUM": "Medio" };
+            var speed = speedLabel[sk.speed] || (sk.power ? (sk.power + " kW") : "");
+            var priceStr = sk.price ? sk.price + " $/kWh" : "";
+            h += '<div class="popup-conn ' + sc + '">' +
+                '<div class="popup-conn-icon">' + CONN_ICON_DEFAULT + '</div>' +
+                '<div class="popup-conn-detail">' +
+                '<div class="popup-conn-type">' + escapeHtml(speed || "Conector") + '</div>' +
+                (priceStr ? '<div class="popup-conn-power">' + priceStr + '</div>' : '') +
+                '</div>' +
+                '<div class="popup-conn-badge ' + sc + '">' + sl + '</div>' +
+                '</div>';
+        });
+        h += '</div>';
+        // Show Supabase last updated time
+        if (s._supabaseLastUpdated) {
+            var d = new Date(s._supabaseLastUpdated);
+            h += '<div class="popup-meta">Estado actualizado: ' + d.toLocaleString("es-CL", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) + '</div>';
+        }
+    } else {
+        // Fallback: show EcoCarga connector data
+        h += '<div class="popup-conn-grid">';
+        s.connectors.forEach(function (c) {
+            var sc = statusCls(c.status);
+            var sl = statusLabel(c.status);
+            var pw = c.maxPower ? c.maxPower + " kW" : "";
+            h += '<div class="popup-conn ' + sc + '">' +
+                '<div class="popup-conn-icon">' + connIcon(c.standard) + '</div>' +
+                '<div class="popup-conn-detail">' +
+                '<div class="popup-conn-type">' + escapeHtml(c.standard) + ' <small>' + c.powerType + '</small></div>' +
+                (pw ? '<div class="popup-conn-power">' + pw + '</div>' : '') +
+                '</div>' +
+                '<div class="popup-conn-badge ' + sc + '">' + sl + '</div>' +
+                '</div>';
+        });
+        h += '</div>';
+        if (s.lastUpdated) {
+            h += '<div class="popup-meta">Actualizado: ' + new Date(s.lastUpdated).toLocaleDateString("es-CL") + '</div>';
+        }
     }
 
     h += '<a class="popup-directions" href="https://www.google.com/maps/dir/?api=1&destination=' + s.lat + ',' + s.lng + '" target="_blank" rel="noopener">Abrir en Google Maps &rarr;</a>';
+
     return h;
 }
 
