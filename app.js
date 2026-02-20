@@ -355,23 +355,25 @@ function navAC(dir) {
 // Data Loading
 // ============================================
 
-function loadAllStations() {
+function loadAllStations(forceSilent) {
     // Try cache first
     var cached = getCachedStations();
     if (cached) {
-        showLoading(true, "Cargando desde cache...");
-        state.allStations = cached.map(normalizeStation);
-        state.stations = state.allStations.slice();
-        buildCommuneIndex();
-        buildOwnerOptions();
-        dom.dataInfo.textContent = state.allStations.length + " estaciones | EcoCarga (cache)";
-        tryGeolocation();
-        // Refresh in background for next visit
+        if (!forceSilent) {
+            showLoading(true, "Cargando desde cache...");
+            state.allStations = cached.map(normalizeStation);
+            state.stations = state.allStations.slice();
+            buildCommuneIndex();
+            buildOwnerOptions();
+            dom.dataInfo.textContent = state.allStations.length + " estaciones | EcoCarga (cache)";
+            tryGeolocation();
+        }
+        // Always refresh cache in background
         fetchAllFromAPI(true);
         return;
     }
 
-    fetchAllFromAPI(false);
+    fetchAllFromAPI(forceSilent ? true : false);
 }
 
 function fetchAllFromAPI(silent) {
@@ -426,20 +428,27 @@ function fetchAllFromAPI(silent) {
             dom.dataInfo.textContent = state.allStations.length + " estaciones | EcoCarga";
             tryGeolocation();
         } else {
-            // Silent background refresh — update markers without disrupting user
-            var hadFilters = (state.userLocation !== null ||
-                dom.statusFilter.value !== "all" ||
-                dom.ownerFilter.value !== "all");
-            state.allStations = items.map(normalizeStation);
+            // Silent background load: merge EcoCarga stations not covered by Supabase
+            var normalized = items.map(normalizeStation);
+            var added = 0;
+            normalized.forEach(function (ecSt) {
+                // Skip if already covered by a Supabase station within 80m
+                var covered = state.allStations.some(function (existing) {
+                    return existing._supabaseProvider &&
+                        haversineMeters(ecSt.lat, ecSt.lng, existing.lat, existing.lng) < SUPABASE_MATCH_RADIUS_M;
+                });
+                if (!covered) {
+                    state.allStations.push(ecSt);
+                    added++;
+                }
+            });
             state.stations = state.allStations.slice();
             buildCommuneIndex();
             buildOwnerOptions();
             _lastRefresh = new Date();
-            var timeStr = _lastRefresh.toLocaleTimeString("es-CL", { hour: "2-digit", minute: "2-digit" });
-            dom.dataInfo.textContent = state.allStations.length + " estaciones | Actualizado " + timeStr;
-            // Re-apply current filters to refresh markers
+            dom.dataInfo.textContent = state.allStations.length + " estaciones \u00b7 DondeCargo + EcoCarga";
             applyFilters();
-            console.log("[ElectroChile] Estado actualizado: " + items.length + " estaciones a las " + timeStr);
+            console.log("[ElectroChile] EcoCarga: " + added + " estaciones adicionales agregadas (total: " + state.allStations.length + ")");
         }
     }).catch(function (err) {
         console.error("Error:", err);
@@ -600,6 +609,9 @@ function buildStationsFromSupabase() {
     // Start polling for real-time updates
     startStatusPolling();
     tryGeolocation();
+
+    // Load EcoCarga in the background to add stations not covered by Supabase
+    loadAllStations(true);
 }
 
 // Distance between two lat/lng in meters (Haversine)
